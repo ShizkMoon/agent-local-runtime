@@ -11,43 +11,38 @@
 <header>
   <span class="logo">◈ aica workbench</span>
   <span id="conn" class="chip chip-warn">connecting…</span>
+  <span id="daemon" class="chip">daemon…</span>
   <span class="spacer"></span>
-  <button id="refresh" title="刷新">⟳</button>
+  <button id="refresh" class="ghost" title="刷新">⟳</button>
 </header>
 <main>
-  <aside id="runs">
+  <aside id="rail">
     <div class="pane-title">Runs</div>
-    <div id="run-list" class="list"></div>
+    <div id="run-list"></div>
   </aside>
-  <aside id="tree">
-    <div class="pane-title">节点树 <span id="run-meta" class="dim"></span></div>
-    <div id="node-tree" class="list"></div>
-  </aside>
-  <section id="detail">
-    <div id="node-head" class="dim">← 选择节点查看事件时间线</div>
-    <div id="tabs">
-      <button data-tab="events" class="on">事件流</button>
-      <button data-tab="spec">spec</button>
-      <button data-tab="result">result</button>
-      <span class="spacer"></span>
-      <span id="evt-count" class="dim"></span>
+  <section id="center">
+    <div id="run-head"><div class="rh-top dim">← 左侧选择 run，或在下方输入新任务</div></div>
+    <div id="stream-wrap">
+      <div id="stream"></div>
+      <button id="jump" hidden>↓ 最新</button>
     </div>
-    <div id="pane-events" class="tabpane on">
-      <div id="timeline"></div>
-      <div id="art-bar"></div>
-      <div id="reply-bar" hidden>
-        <input id="reply-text" placeholder="回复 gate / waiting 节点（写入 reply.txt）…">
-        <button id="reply-send">发送</button>
+    <div id="composer">
+      <div id="composer-card">
+        <textarea id="composer-text" rows="2" placeholder="派发一个新任务…"></textarea>
+        <div id="composer-bar">
+          <span id="composer-hint" class="dim">Enter 发送 · Shift+Enter 换行</span>
+          <span class="spacer"></span>
+          <button id="composer-send">派发 ▸</button>
+        </div>
       </div>
     </div>
-    <pre id="pane-spec" class="tabpane jsonpane"></pre>
-    <pre id="pane-result" class="tabpane jsonpane"></pre>
-    <div id="art-view" hidden>
-      <div id="art-head"><b id="art-name"></b><button id="art-close">✕</button></div>
-      <div id="art-body"></div>
-    </div>
   </section>
+  <aside id="sheet">
+    <div id="sheet-head"><b id="sheet-title"></b><span class="spacer"></span><button id="sheet-close" class="ghost">✕</button></div>
+    <div id="sheet-body"></div>
+  </aside>
 </main>
+<div id="toast" hidden></div>
 <script type="module" src="/app.js"></script>
 </body>
 </html>

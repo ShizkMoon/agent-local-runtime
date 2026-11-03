@@ -1,17 +1,20 @@
 // aica workbench · v0 桥接服务器
-// 只读桥：把 %LOCALAPPDATA%\aica\state\runs\ 的文件态暴露成 JSON API + SSE，
-// 静态托管 public/。无依赖（node:http + node:fs），供 Edge --app 壳使用；
+// 桥：把 %LOCALAPPDATA%\aica\state\runs\ 的文件态暴露成 JSON API + SSE，
+// 静态托管 public/；POST /api/tasks 经 `ar dispatch` 建 run 并确保常驻 daemon。
+// 无依赖（node:http + node:fs + node:child_process），供 Edge --app 壳使用；
 // 接口面保持稳定，日后 Tauri 壳只换窗口层、不动此桥。
 import { createServer } from "node:http";
-import { existsSync, readdirSync, readFileSync, statSync, watch, appendFileSync, mkdirSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync, watch, appendFileSync, mkdirSync, openSync, readSync, closeSync } from "node:fs";
 import { join, normalize, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { execFile, execFileSync, spawn, type ChildProcess } from "node:child_process";
 
 const PORT = Number(process.env.WB_PORT ?? 4399);
 const HOST = "127.0.0.1";
 const STATE = process.env.AICA_STATE ?? join(process.env.LOCALAPPDATA!, "aica", "state");
 const RUNS = join(STATE, "runs");
 const PUB = fileURLToPath(new URL("./public/", import.meta.url));
+const AR_CLI = process.env.AR_CLI ?? fileURLToPath(new URL("../src/cli.ts", import.meta.url));
 const ART_CAP = 512 * 1024; // artifact 读取上限
 const EVT_CAP = 2000;       // events 单次返回上限
 
@@ -67,6 +70,45 @@ function nodeStatus(rootId: string, path: string): { status: string; summary?: s
   return { status: existsSync(join(dir, "spec.json")) ? "running" : "empty" };
 }
 
+/** 读 events.jsonl 尾部 ~8KB 的最后一条可解析事件（append-only，尾行即最新） */
+function tailEvent(file: string): any | null {
+  try {
+    const size = statSync(file).size;
+    if (!size) return null;
+    const fd = openSync(file, "r");
+    try {
+      const buf = Buffer.alloc(Math.min(size, 8192));
+      readSync(fd, buf, 0, buf.length, size - buf.length);
+      const lines = buf.toString("utf8").split("\n");
+      for (let i = lines.length - 1; i >= 0; i--) {
+        const l = lines[i].trim();
+        if (!l) continue;
+        try { const ev = JSON.parse(l); if (ev?.ts) return ev; } catch { /* 半截首行跳过 */ }
+      }
+    } finally { closeSync(fd); }
+  } catch { /* 读失败当无事件 */ }
+  return null;
+}
+
+function evHint(ev: any): string {
+  const d = ev?.data ?? {};
+  const s = d.tool ?? d.text ?? d.cmd ?? d.question ?? d.summary ?? d.args ?? ev?.kind ?? "";
+  return String(s).replace(/\s+/g, " ").trim().slice(0, 80);
+}
+
+/** run 级最近事件 + 全部节点最晚 finished_at（rail 预览/耗时用） */
+function runPulse(rootId: string, paths: string[]): { last: any | null; ended_at: string | null } {
+  let best: any = null, ended: string | null = null;
+  for (const p of paths) {
+    const dir = join(RUNS, rootId, "nodes", ...p.split("/"));
+    const ev = tailEvent(join(dir, "events.jsonl"));
+    if (ev && (!best || ev.ts > best.ts)) best = ev;
+    const r = readJson<any>(join(dir, "result.json"));
+    if (r?.finished_at && (!ended || r.finished_at > ended)) ended = r.finished_at;
+  }
+  return { last: best ? { kind: best.kind, ts: best.ts, hint: evHint(best), tool: best.data?.tool ?? null } : null, ended_at: ended };
+}
+
 // ---- API handlers ----
 function apiRuns(res: any): void {
   if (!existsSync(RUNS)) return json(res, 200, { runs: [] });
@@ -78,9 +120,11 @@ function apiRuns(res: any): void {
       const counts: Record<string, number> = {};
       for (const p of paths) counts[nodeStatus(d.name, p).status] = (counts[nodeStatus(d.name, p).status] ?? 0) + 1;
       const rollup = counts.failed ? "failed" : counts.blocked ? "blocked" : (counts.running || counts.empty || !paths.length) ? "running" : "done";
+      const pulse = runPulse(d.name, paths);
       return { root_id: d.name, created_at: meta?.created_at ?? null, kind: meta?.kind ?? null,
                subject: meta?.subject ?? null, plan_version: meta?.plan_version ?? null,
-               nodes: paths.length, counts, status: rollup };
+               nodes: paths.length, counts, status: rollup,
+               last: pulse.last, ended_at: pulse.ended_at };
     })
     .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
   json(res, 200, { runs });
@@ -113,9 +157,10 @@ function apiNode(res: any, rootId: string, path: string): void {
     : [];
   const evFile = join(dir, "events.jsonl");
   const st = nodeStatus(rootId, path);
+  const spec = readJson<any>(join(dir, "spec.json"));
   json(res, 200, {
-    path, status: st.status, spec: readJson(join(dir, "spec.json")), result: readJson(join(dir, "result.json")),
-    artifacts, has_reply: existsSync(join(dir, "reply.txt")),
+    path, status: st.status, spec, result: readJson(join(dir, "result.json")),
+    artifacts, has_reply: existsSync(join(dir, "reply.txt")) || (Array.isArray(spec?.reply) && spec.reply.length > 0),
     events_bytes: existsSync(evFile) ? statSync(evFile).size : 0,
   });
 }
@@ -150,6 +195,86 @@ function apiArtifact(res: any, rootId: string, path: string, name: string): void
   res.end(readFileSync(file));
 }
 
+// ---- ar CLI 桥：dispatch / reply / daemon ----
+// ar 路径：node <AR_CLI> <cmd>；env 显式给已解析的 AICA_STATE（空串会让 runs.ts 落相对路径）
+let daemonProc: ChildProcess | null = null;
+let daemonCache = { at: 0, running: false };
+
+function arEnv(): NodeJS.ProcessEnv { return { ...process.env, AICA_STATE: STATE }; }
+
+/** 已在跑的常驻 daemon 的 pid 列表（跨 workbench 重启去重；--once 实例不算） */
+function daemonPids(): number[] {
+  if (process.platform !== "win32") {
+    return daemonProc && daemonProc.exitCode === null && daemonProc.pid ? [daemonProc.pid] : [];
+  }
+  try {
+    const ps = "Get-CimInstance Win32_Process -Filter \"Name='node.exe'\" | " +
+      "Where-Object { $_.CommandLine -match 'cli\\.ts' -and $_.CommandLine -match '\\sdaemon(\\s|$)' " +
+      "-and $_.CommandLine -notmatch '--once' } | Select-Object -ExpandProperty ProcessId";
+    const out = execFileSync("powershell", ["-NoProfile", "-Command", ps],
+      { encoding: "utf8", timeout: 8000, windowsHide: true });
+    return out.split(/\r?\n/).map(s => Number(s.trim())).filter(n => n > 0);
+  } catch {
+    return daemonProc && daemonProc.exitCode === null && daemonProc.pid ? [daemonProc.pid] : [];
+  }
+}
+
+function daemonRunning(): boolean {
+  if (Date.now() - daemonCache.at < 3000) return daemonCache.running;
+  const running = daemonPids().length > 0 || (daemonProc != null && daemonProc.exitCode === null);
+  daemonCache = { at: Date.now(), running };
+  return running;
+}
+
+/** 确保常驻 daemon 在跑（消费派发意图）；已跑则不动，未跑则 detached 拉起，日志落 STATE/daemon.log */
+function ensureDaemon(): boolean {
+  if (daemonRunning()) return true;
+  try {
+    mkdirSync(STATE, { recursive: true });
+    const logFd = openSync(join(STATE, "daemon.log"), "a");
+    daemonProc = spawn(process.execPath, [AR_CLI, "daemon"], {
+      detached: true, stdio: ["ignore", logFd, logFd], windowsHide: true, env: arEnv(),
+    });
+    daemonProc.unref();
+    daemonProc.on("exit", () => { daemonProc = null; });
+    daemonCache = { at: Date.now(), running: true };
+    return true;
+  } catch { return false; }
+}
+
+function apiDaemon(res: any): void {
+  json(res, 200, { running: daemonRunning(), cli: AR_CLI, spawned: daemonProc?.pid ?? null });
+}
+
+/** POST /api/tasks {goal,...} → `ar dispatch`（stdin 收任务 JSON，内部 createRun+写根 spec）→ 确保 daemon */
+function apiTask(req: any, res: any): void {
+  let body = "";
+  req.on("data", (c: Buffer) => { body += c; if (body.length > 256 * 1024) req.destroy(); });
+  req.on("end", () => {
+    let task: any;
+    try { task = JSON.parse(body || "{}"); } catch (e) { return err(res, 400, String(e)); }
+    const goal = String(task?.goal ?? "").trim();
+    if (!goal) return err(res, 400, "goal required");
+    const payload = JSON.stringify({
+      subject: goal, to: task.to ?? "agent:local", kind: task.kind ?? "task",
+      agent: task.agent ?? "pi", ...(task.profile ? { profile: task.profile } : {}),
+      ...(task.model ? { model: task.model } : {}), ...(task.tools ? { tools: task.tools } : {}),
+      ...(task.accept ? { accept: task.accept } : {}), ev_id: `wb-${Date.now().toString(36)}`,
+    });
+    const child = execFile(process.execPath, [AR_CLI, "dispatch"],
+      { env: arEnv(), timeout: 20_000, windowsHide: true, maxBuffer: 1024 * 1024 },
+      (e, stdout, stderr) => {
+        if (e) return err(res, 500, `ar dispatch: ${String(stderr || e.message || e).slice(0, 400)}`);
+        let env1: any;
+        try { env1 = JSON.parse(stdout.trim().split("\n").pop()!); }
+        catch { return err(res, 500, "bad ar dispatch output"); }
+        if (!env1?.ok) return err(res, 500, JSON.stringify(env1?.error ?? env1));
+        json(res, 200, { root_id: env1.data.root_id, node: env1.data.node, daemon: ensureDaemon() });
+      });
+    child.stdin!.end(payload);
+  });
+}
+
 function apiReply(req: any, res: any, rootId: string, path: string): void {
   const dir = safeJoin(rootId, "nodes", ...path.split("/"));
   if (!dir || !existsSync(dir)) return err(res, 404, "node not found");
@@ -159,9 +284,20 @@ function apiReply(req: any, res: any, rootId: string, path: string): void {
     try {
       const { text } = JSON.parse(body || "{}");
       if (typeof text !== "string" || !text.trim()) return err(res, 400, "text required");
-      // v0 stub：写 reply.txt；v0.1 由 daemon 消费并注入 spec.reply
-      appendFileSync(join(dir, "reply.txt"), JSON.stringify({ ts: new Date().toISOString(), text }) + "\n", "utf8");
-      json(res, 200, { ok: true });
+      const mark = () => appendFileSync(join(dir, "reply.txt"),
+        JSON.stringify({ ts: new Date().toISOString(), text }) + "\n", "utf8");
+      // 首选 ar reply（注入 spec.reply，worker 上下文可见）；失败回退写 reply.txt 文件标记
+      execFile(process.execPath, [AR_CLI, "reply", "--run", rootId, "--node", path, "--text", text.trim()],
+        { env: arEnv(), timeout: 10_000, windowsHide: true, maxBuffer: 512 * 1024 },
+        (e, _stdout, stderr) => {
+          if (e) {
+            try { mark(); return json(res, 200, { ok: true, mode: "file", warn: String(stderr || e).slice(0, 300) }); }
+            catch (e2) { return err(res, 500, String(e2)); }
+          }
+          try { mark(); } catch { /* 标记失败不阻塞 */ }
+          ensureDaemon(); // 待拉起节点若因回复而满足条件，保证有消费者
+          json(res, 200, { ok: true, mode: "ar" });
+        });
     } catch (e) { err(res, 400, String(e)); }
   });
 }
@@ -208,6 +344,8 @@ const server = createServer((req, res) => {
   try {
     if (req.method === "GET" && p === "/api/runs") return apiRuns(res);
     if (req.method === "GET" && p === "/api/stream") return apiStream(req, res);
+    if (req.method === "GET" && p === "/api/daemon") return apiDaemon(res);
+    if (req.method === "POST" && p === "/api/tasks") return apiTask(req, res);
     let m: RegExpMatchArray | null;
     if (req.method === "GET" && (m = p.match(R.tree))) {
       if (!okId(m[1])) return err(res, 400, "bad id");
