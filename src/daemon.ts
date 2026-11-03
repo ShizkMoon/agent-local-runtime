@@ -15,7 +15,8 @@ function launcher(spec: SpecEnvelope, nodeDir: string): { cmd: string; args: str
   switch (spec.agent ?? "pi") {
     case "pi":
       // -p 非交互跑完即退；aica-pi 经 -e 加载；工具面按 spec.tools 裁剪
-      const piArgs = ["-p", "--mode", "json", "-e", `${process.env.AICA_PI_PKG ?? "aica-pi"}/extensions/events.ts`, "-e", `${process.env.AICA_PI_PKG ?? "aica-pi"}/extensions/tools.ts`];
+      const pkg = process.env.AICA_PI_PKG ?? new URL("../aica-pi", import.meta.url).pathname;
+      const piArgs = ["-p", "--mode", "json", "-e", join(pkg, "extensions", "events.ts"), "-e", join(pkg, "extensions", "tools.ts")];
       if (spec.tools?.length) piArgs.push("--tools", spec.tools.join(","));
       return { cmd: "pi", args: [...piArgs, spec.goal] };
     case "claude":

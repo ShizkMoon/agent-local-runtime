@@ -1,17 +1,30 @@
-// aica-pi events：把 pi 的事件流逐条 append 到节点目录的 events.jsonl
-// 生成式 UI 与 DS-Bot 进度卡片的唯一数据面（骨架；挂钩 pi 事件 API 后填实）
+// aica-pi · events：把 pi 事件流逐条 append 到节点目录 events.jsonl
+// 生成式 UI / DS-Bot 进度卡片 / Obelisk 召回的唯一数据面
 import { appendFileSync } from "node:fs";
 import { join } from "node:path";
 
-const NODE_DIR = process.cwd();
-const EVENTS = join(NODE_DIR, "events.jsonl");
+const EVENTS = join(process.cwd(), "events.jsonl");
+const PREVIEW = 300;
 
-export function emit(kind: string, data: Record<string, unknown>): void {
-  appendFileSync(EVENTS, JSON.stringify({ ts: new Date().toISOString(), kind, data }) + "\n", "utf8");
+function emit(kind: string, data: Record<string, unknown>): void {
+  try {
+    appendFileSync(EVENTS, JSON.stringify({ ts: new Date().toISOString(), kind, data }) + "\n", "utf8");
+  } catch { /* 事件流失败不得阻塞 Worker */ }
 }
 
-// TODO: 注册到 pi 的 extension 事件钩子：
-// onToolCall(t) → emit("tool_call", {name, args_preview})
-// onFileEdit(f) → emit("file_edit", {path, diff_preview})
-// onMessage(m)  → emit("message", {role, text_preview})
-// onCheckpoint  → emit("checkpoint", {...})
+function preview(v: unknown): string {
+  const s = typeof v === "string" ? v : JSON.stringify(v);
+  return s.length > PREVIEW ? s.slice(0, PREVIEW) + "…" : s;
+}
+
+export default function (pi: any) {
+  pi.on("tool_execution_start", async (event: any) => {
+    emit("tool_call", { tool: event.toolName ?? event.name, args: preview(event.args) });
+  });
+  pi.on("tool_execution_end", async (event: any) => {
+    emit("tool_result", { tool: event.toolName ?? event.name, is_error: !!event.isError, output: preview(event.result ?? event.output) });
+  });
+  pi.on("agent_message", async (event: any) => {
+    emit("message", { role: event.role ?? "assistant", text: preview(event.text ?? event.content) });
+  });
+}
