@@ -112,6 +112,8 @@ function workerEnv(rootId: string, path: string): NodeJS.ProcessEnv {
   const prepend = [
     join(process.env.ProgramFiles ?? "C:\\Program Files", "nodejs"),
     process.env.APPDATA ? join(process.env.APPDATA, "npm") : undefined,
+    // .local/bin 放用户级 .cmd 包装（agent-desktop.cmd/ar.cmd）：孙进程经 shell 调用时可达
+    process.env.USERPROFILE ? join(process.env.USERPROFILE, ".local", "bin") : undefined,
   ].filter((p): p is string => !!p && existsSync(p));
   const key = Object.keys(env).find((k) => k.toLowerCase() === "path") ?? "PATH";
   env[key] = [...prepend, env[key] ?? ""].join(";");

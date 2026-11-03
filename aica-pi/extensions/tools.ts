@@ -7,6 +7,7 @@ import { writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { Type } from "typebox";
+import { resolveBin } from "./paths.ts";
 
 const ART = join(process.cwd(), "artifacts");
 const PREVIEW = 2000;
@@ -24,6 +25,11 @@ function ar(args: string[]): string {
 // AgentToolResult：content 是模型可见文本，details 留给 UI/日志
 function ok(text: string, extra?: Record<string, unknown>) {
   return { content: [{ type: "text" as const, text: text.trim() || "(no output)" }], details: {}, ...extra };
+}
+
+// 非致命失败：模型看到可读错误文本可继续推进（比 execFile ENOENT 原始堆栈友好）
+function err(text: string) {
+  return { content: [{ type: "text" as const, text }], details: {}, isError: true };
 }
 
 // 全文落盘 → 返回 ref + 预览（噪音防火墙契约）
@@ -63,7 +69,12 @@ export default function (pi: any) {
     description: "知识检索（kb 环）：查任务历史、文档、会话记录。返回 top-k 分块。",
     parameters: Type.Object({ query: Type.String(), k: Type.Optional(Type.Number()) }),
     async execute(_id: string, args: any) {
-      return ok(sh("kn", ["recall", args.query, "--k", String(args.k ?? 5)]));
+      const kn = resolveBin("kn");
+      if (!kn) {
+        // 知识库 CLI 仍在设计阶段：不报错，让模型当作"召回为空"继续并在摘要注明
+        return ok("(kn 未安装：知识库功能尚未实现，本次无可召回内容。请凭节点上下文与 already_known 继续，并在执行摘要中注明未做知识检索。)");
+      }
+      return ok(sh(kn, ["recall", args.query, "--k", String(args.k ?? 5)]));
     },
   });
 
@@ -100,7 +111,9 @@ export default function (pi: any) {
     description: "Windows 桌面 GUI 自动化（UIA）：snapshot 读无障碍树，ref 语义动作。大快照自动落盘回 ref。用法文档：先跑 ['skills','get','desktop']。",
     parameters: Type.Object({ argv: Type.Array(Type.String(), { description: "agent-desktop 参数，如 ['snapshot','--app','X','-i']" }) }),
     async execute(_id: string, args: any) {
-      return ok(spill(sh("agent-desktop", args.argv), "ad"));
+      const bin = resolveBin("agent-desktop");
+      if (!bin) return err("agent-desktop 未找到（PATH 与已知安装位均无）。可设 AICA_AGENT_DESKTOP 指向 agent-desktop.exe。");
+      return ok(spill(sh(bin, args.argv), "ad"));
     },
   });
 
@@ -110,7 +123,11 @@ export default function (pi: any) {
     description: "网页自动化（ego Space，沿用登录态、不抢焦点）。提交 Node.js 片段，可用 taskSpace/page.snapshot/page.click 等 helper。",
     parameters: Type.Object({ script: Type.String() }),
     async execute(_id: string, args: any) {
-      return ok(spill(sh("ego-browser", ["nodejs", "-e", args.script]), "ego"));
+      const bin = resolveBin("ego-browser");
+      if (!bin) return err("ego-browser 未找到（PATH 与已知安装位均无）。可设 AICA_EGO_BROWSER 指向 ego-browser.exe。");
+      // execFile argv 不经 shell：script 作为单个 argv 传给 ego，无 cmd 转义/截断问题
+      // （上限约 32k 字符的 Windows 命令行；大输出仍走 artifact 落盘契约）
+      return ok(spill(sh(bin, ["nodejs", "-e", args.script]), "ego"));
     },
   });
 }
