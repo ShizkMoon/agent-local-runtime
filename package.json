@@ -1,0 +1,12 @@
+{
+  "name": "ar",
+  "version": "0.1.0",
+  "description": "agent:local runtime — run/节点生命周期管理（evd 调度之外的那层）",
+  "type": "module",
+  "bin": { "ar": "./dist/cli.js" },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "ar": "node --experimental-strip-types src/cli.ts"
+  },
+  "engines": { "node": ">=22.19" }
+}

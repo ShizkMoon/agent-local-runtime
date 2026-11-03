@@ -1,0 +1,16 @@
+{
+  "name": "aica-pi",
+  "version": "0.1.0",
+  "description": "agent:local worker 的 pi package：工具面 + 事件流 + profile",
+  "pi": {
+    "extensions": ["extensions/events.ts", "extensions/tools.ts"],
+    "skills": ["skills/"],
+    "prompts": ["prompts/"]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-agent-core": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  }
+}
