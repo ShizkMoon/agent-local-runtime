@@ -4,7 +4,8 @@ import { join } from "node:path";
 import type { SpecEnvelope, ResultEnvelope, EventRecord } from "./envelope.ts";
 import { nodeId, stableId } from "./envelope.ts";
 
-const STATE = process.env.AICA_STATE ?? join(process.env.LOCALAPPDATA!, "aica", "state");
+// 空串按未设置处理：daemon 若把 AICA_STATE="" 传给 worker，STATE="" 会让 RUNS_DIR 变成相对路径
+export const STATE = process.env.AICA_STATE || join(process.env.LOCALAPPDATA!, "aica", "state");
 export const RUNS_DIR = join(STATE, "runs");
 const INDEX = join(RUNS_DIR, "index.jsonl");
 
@@ -69,7 +70,7 @@ export function readResult(rootId: string, path: string): ResultEnvelope | null 
   return readJson<ResultEnvelope>(join(nodeDir(rootId, path), "result.json"));
 }
 
-export function writeResult(rootId: string, path: string, result: Omit<ResultEnvelope, "id" | "finished_at"> & Partial<ResultEnvelope>): ResultEnvelope {
+export function writeResult(rootId: string, path: string, result: Omit<ResultEnvelope, "id" | "finished_at" | "type"> & Partial<ResultEnvelope>): ResultEnvelope {
   const full: ResultEnvelope = { id: nodeId(rootId, path), finished_at: new Date().toISOString(), ...result, type: "result" };
   writeJson(join(nodeDir(rootId, path), "result.json"), full);
   appendFileSync(INDEX, JSON.stringify({ ts: full.finished_at, event: "result", root_id: rootId, node: full.id, status: full.status }) + "\n", "utf8");

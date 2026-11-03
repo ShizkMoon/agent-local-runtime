@@ -6,7 +6,8 @@
   "bin": { "ar": "./dist/cli.js" },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "ar": "node --experimental-strip-types src/cli.ts"
+    "ar": "node src/cli.ts",
+    "smoke": "node scripts/smoke-e2e.mjs"
   },
   "engines": { "node": ">=22.19" }
 }

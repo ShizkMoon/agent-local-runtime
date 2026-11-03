@@ -38,10 +38,13 @@ async function main(): Promise<void> {
       writeSpec(rootId, "root", {
         type: "assign",
         agent: task.agent ?? "pi",
+        profile: task.profile,
+        model: task.model,
         goal: task.subject ?? task.description ?? "",
         inputs: task.payload ? [{ ref: task.payload }] : [],
         accept: task.accept ?? ["输出一句话执行摘要"],
         budget: task.budget ?? { depth_left: 2 },
+        tools: task.tools,
       });
       return out(true, cmd, { root_id: rootId, node: `node:${rootId}/root`, ev_id: task.ev_id });
     }
@@ -50,11 +53,14 @@ async function main(): Promise<void> {
       writeSpec(rootId, arg("--path") ?? `${Date.now().toString(36)}`, {
         type: "assign",
         agent: arg("--agent") ?? "pi",
+        profile: arg("--profile") as SpecEnvelope["profile"],
+        model: arg("--model"),
         goal: arg("--goal") ?? (await readStdin()).trim(),
         parent: arg("--parent"),
         depends: arg("--deps")?.split(","),
         accept: arg("--accept")?.split(";") ?? ["输出一句话执行摘要"],
         budget: { depth_left: Number(arg("--depth") ?? 2) },
+        tools: arg("--tools")?.split(","),
       });
       return out(true, cmd, { root_id: rootId });
     }
@@ -88,7 +94,11 @@ async function main(): Promise<void> {
     }
     case "daemon": {
       runsDir();
-      return daemonLoop();
+      await daemonLoop({
+        once: process.argv.includes("--once"),
+        timeoutMs: Number(arg("--timeout-ms") ?? process.env.AR_DAEMON_TIMEOUT_MS ?? 0) || undefined,
+      });
+      return;
     }
     case "version":
       return out(true, cmd, { version: "0.1.0", runs: RUNS_DIR });

@@ -20,6 +20,7 @@ export interface SpecEnvelope {
   type: "assign" | "expand";
   agent?: AgentKind;      // Worker 类型，默认 "pi"
   profile?: "worker" | "orchestrator";
+  model?: string;         // 模型 ID（如 "opencode-pool/deepseek-v4.1-flash"），缺省走 AICA_PI_MODEL/内置默认
   mode?: { shape: NodeMode; axis?: string; n?: number; stop_when?: string; why?: string };
   goal: string;           // 节点目标（渲染进 worker 上下文）
   inputs?: SpecInput[];
@@ -44,7 +45,7 @@ export interface ResultEnvelope {
 
 export interface EventRecord {
   ts: string;
-  kind: "tool_call" | "file_edit" | "message" | "checkpoint" | "spawn" | "exit" | "gate";
+  kind: "tool_call" | "tool_execution" | "agent_message" | "file_edit" | "message" | "checkpoint" | "spawn" | "exit" | "gate";
   data: Record<string, unknown>;
 }
 
