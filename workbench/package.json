@@ -1,0 +1,10 @@
+{
+  "name": "aica-workbench",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "aica v0 workbench: node bridge server + static frontend + Edge --app shell",
+  "dependencies": {
+    "marked": "15.0.12"
+  }
+}

@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>aica workbench</title>
+<link rel="stylesheet" href="/style.css">
+<script src="/vendor/marked.min.js" defer></script>
+</head>
+<body>
+<header>
+  <span class="logo">◈ aica workbench</span>
+  <span id="conn" class="chip chip-warn">connecting…</span>
+  <span class="spacer"></span>
+  <button id="refresh" title="刷新">⟳</button>
+</header>
+<main>
+  <aside id="runs">
+    <div class="pane-title">Runs</div>
+    <div id="run-list" class="list"></div>
+  </aside>
+  <aside id="tree">
+    <div class="pane-title">节点树 <span id="run-meta" class="dim"></span></div>
+    <div id="node-tree" class="list"></div>
+  </aside>
+  <section id="detail">
+    <div id="node-head" class="dim">← 选择节点查看事件时间线</div>
+    <div id="tabs">
+      <button data-tab="events" class="on">事件流</button>
+      <button data-tab="spec">spec</button>
+      <button data-tab="result">result</button>
+      <span class="spacer"></span>
+      <span id="evt-count" class="dim"></span>
+    </div>
+    <div id="pane-events" class="tabpane on">
+      <div id="timeline"></div>
+      <div id="art-bar"></div>
+      <div id="reply-bar" hidden>
+        <input id="reply-text" placeholder="回复 gate / waiting 节点（写入 reply.txt）…">
+        <button id="reply-send">发送</button>
+      </div>
+    </div>
+    <pre id="pane-spec" class="tabpane jsonpane"></pre>
+    <pre id="pane-result" class="tabpane jsonpane"></pre>
+    <div id="art-view" hidden>
+      <div id="art-head"><b id="art-name"></b><button id="art-close">✕</button></div>
+      <div id="art-body"></div>
+    </div>
+  </section>
+</main>
+<script type="module" src="/app.js"></script>
+</body>
+</html>
