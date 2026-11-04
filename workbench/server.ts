@@ -4,12 +4,14 @@
 // 无依赖（node:http + node:fs + node:child_process），供 Edge --app 壳使用；
 // 接口面保持稳定，日后 Tauri 壳只换窗口层、不动此桥。
 import { createServer } from "node:http";
-import { existsSync, readdirSync, readFileSync, statSync, watch, appendFileSync, mkdirSync, openSync, rmSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync, watch, appendFileSync, mkdirSync, openSync, rmSync, writeFileSync, renameSync } from "node:fs";
 import { join, normalize, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFile, execFileSync, spawn, type ChildProcess } from "node:child_process";
 // S16：视图投影住在 view.ts（纯函数，runsDir 由参数传入）；本文件只做 HTTP 胶水
 import { buildView, okId, badSeg, readJson, safeJoinIn, nodePaths, nodeStatus, evHint, runPulse } from "./view.ts";
+// S19：审批决策闭集由 gate.ts 持有（唯一真相），桥只做校验与落盘
+import { GATE_DECISIONS } from "../aica-pi/extensions/gate.ts";
 
 const PORT = Number(process.env.WB_PORT ?? 4399);
 const HOST = "127.0.0.1";
@@ -235,6 +237,13 @@ function apiReply(req: any, res: any, rootId: string, path: string): void {
     try {
       const { text } = JSON.parse(body || "{}");
       if (typeof text !== "string" || !text.trim()) return err(res, 400, "text required");
+      // S19 / M4：有未答 gate 时，回复 = 拒绝 + 说明原因（写 gate-ans，不是新消息，也不调 ar reply）
+      const pend = pendingApproval(dir);
+      if (pend) {
+        const w = writeAnswer(dir, { decision: "rejected", feedback: text.trim() });
+        if (w.ok) return json(res, 200, { ok: true, mode: "gate", decision: "rejected", gate: pend.call_id ?? null });
+        return err(res, 500, w.error ?? "gate answer failed");
+      }
       const mark = () => appendFileSync(join(dir, "reply.txt"),
         JSON.stringify({ ts: new Date().toISOString(), text }) + "\n", "utf8");
       // 首选 ar reply（注入 spec.reply，worker 上下文可见）；失败回退写 reply.txt 文件标记
@@ -250,6 +259,102 @@ function apiReply(req: any, res: any, rootId: string, path: string): void {
           json(res, 200, { ok: true, mode: "ar" });
         });
     } catch (e) { err(res, 400, String(e)); }
+  });
+}
+
+// ---- S19 审批桥：gate-req.json（gate 写的卡，含服务端生成的 opts）→ gate-ans.json（闭集决策） ----
+const APPROVAL_REQ = "gate-req.json";
+const APPROVAL_ANS = "gate-ans.json";
+const APPROVAL_TTL_MS = 10 * 60_000;   // 超过按失效过滤：worker 被 kill 时 gate 来不及清 req
+
+interface ApprovalRemember { tool: string; tier: string; target: string }
+interface ApprovalOpt { label: string; decision: string; scope?: ApprovalRemember | null; hint?: string }
+interface ApprovalReq {
+  v?: number; call_id?: string; tool?: string; tier?: string; target?: string;
+  restricted?: boolean; rememberable?: boolean; reason?: string; hit?: string;
+  args?: unknown; targets?: string[]; opts?: ApprovalOpt[]; asked_at?: string;
+}
+
+/** 读未答的 gate-req：文件在、未超过 TTL、且没有「比 req 更新」的 gate-ans（旧 ans 是上一轮的残答） */
+function pendingApproval(dir: string): { req: ApprovalReq; age_ms: number } | null {
+  const file = join(dir, APPROVAL_REQ);
+  if (!existsSync(file)) return null;
+  let reqMs = 0;
+  try { reqMs = statSync(file).mtimeMs; } catch { return null; }
+  const ans = join(dir, APPROVAL_ANS);
+  if (existsSync(ans)) {
+    try { if (statSync(ans).mtimeMs >= reqMs) return null; } catch { /* ans 刚被清：当未答 */ }
+  }
+  const age = Date.now() - reqMs;
+  if (age > APPROVAL_TTL_MS) return null;
+  const req = readJson<ApprovalReq>(file);
+  return req && typeof req === "object" ? { req, age_ms: Math.max(0, Math.round(age)) } : null;
+}
+
+/** 写 gate-ans：decision 必须落闭集；remember 只认 gate 在 req.opts 里给过的 scope（opts[].scope，前端伪造无效） */
+function writeAnswer(dir: string, body: any): { ok: boolean; code?: number; error?: string; decision?: string; remember?: ApprovalRemember | null } {
+  const decision = String(body?.decision ?? "");
+  if (!(GATE_DECISIONS as readonly string[]).includes(decision)) {
+    return { ok: false, code: 400, error: `decision 必须是闭集之一：${GATE_DECISIONS.join(" | ")}` };
+  }
+  const pend = pendingApproval(dir);
+  if (!pend) return { ok: false, code: 404, error: "没有待答的 gate-req（已答或已超时）" };
+  const ans: any = { decision, by: "workbench", at: new Date().toISOString() };
+  const feedback = typeof body?.feedback === "string" ? body.feedback.trim().slice(0, 2000) : "";
+  if (feedback) ans.feedback = feedback;
+  const rem = body?.remember;
+  if (decision === "allowed-once" && rem && typeof rem === "object") {
+    const hit = (pend.req.opts ?? []).find(o => o?.scope
+      && o.scope.tool === rem.tool && o.scope.tier === rem.tier && o.scope.target === rem.target);
+    if (hit?.scope) ans.remember = { tool: hit.scope.tool, tier: hit.scope.tier, target: hit.scope.target };
+  }
+  try {
+    const file = join(dir, APPROVAL_ANS);
+    const tmp = `${file}.tmp`;
+    writeFileSync(tmp, JSON.stringify(ans, null, 2) + "\n", "utf8");
+    renameSync(tmp, file);   // 原子替换：gate 每 500ms 读一次，不能读到半截 JSON
+  } catch (e) { return { ok: false, code: 500, error: String(e) }; }
+  return { ok: true, decision, remember: ans.remember ?? null };
+}
+
+/** GET /api/approvals：所有 run 的未答审批卡（gate 生成的内容原样透出，前端只渲染） */
+function apiApprovals(res: any): void {
+  const approvals: any[] = [];
+  if (existsSync(RUNS)) {
+    for (const ent of readdirSync(RUNS, { withFileTypes: true })) {
+      if (!ent.isDirectory() || !okId(ent.name)) continue;
+      for (const p of nodePaths(RUNS, ent.name)) {
+        const dir = safeJoin(ent.name, "nodes", ...p.split("/"));
+        if (!dir) continue;
+        const pend = pendingApproval(dir);
+        if (!pend) continue;
+        const r = pend.req;
+        approvals.push({
+          id: `ap:${ent.name}/${p}:${String(r.call_id ?? "")}`,
+          run: ent.name, path: p,
+          call_id: r.call_id ?? null, tool: r.tool ?? null, tier: r.tier ?? null, target: r.target ?? null,
+          restricted: !!r.restricted, reason: r.reason ?? "", args: r.args ?? null, targets: r.targets ?? [],
+          opts: Array.isArray(r.opts) ? r.opts : [], asked_at: r.asked_at ?? null, age_ms: pend.age_ms,
+        });
+      }
+    }
+  }
+  approvals.sort((a, b) => (b.age_ms ?? 0) - (a.age_ms ?? 0));
+  json(res, 200, { approvals, count: approvals.length });
+}
+
+/** POST .../approve {decision, feedback?, remember?} —— 对应卡上由 gate 生成的 opts */
+function apiApprove(req: any, res: any, rootId: string, path: string): void {
+  const dir = safeJoin(rootId, "nodes", ...path.split("/"));
+  if (!dir || !existsSync(dir)) return err(res, 404, "node not found");
+  let body = "";
+  req.on("data", (c: Buffer) => { body += c; if (body.length > 32 * 1024) req.destroy(); });
+  req.on("end", () => {
+    let payload: any;
+    try { payload = JSON.parse(body || "{}"); } catch (e) { return err(res, 400, String(e)); }
+    const w = writeAnswer(dir, payload);
+    if (!w.ok) return err(res, w.code ?? 500, w.error ?? "approve failed");
+    json(res, 200, { ok: true, decision: w.decision, remember: w.remember ?? null });
   });
 }
 
@@ -337,6 +442,7 @@ const R = {
   node: /^\/api\/runs\/([^/]+)\/node\/(.+)\/events$/,
   art: /^\/api\/runs\/([^/]+)\/node\/(.+)\/artifact\/([^/]+)$/,
   reply: /^\/api\/runs\/([^/]+)\/node\/(.+)\/reply$/,
+  approve: /^\/api\/runs\/([^/]+)\/node\/(.+)\/approve$/,
   abort: /^\/api\/runs\/([^/]+)\/node\/(.+)\/abort$/,
   transcript: /^\/api\/runs\/([^/]+)\/node\/(.+)\/transcript$/,
   retry: /^\/api\/runs\/([^/]+)\/node\/(.+)\/retry$/,
@@ -352,6 +458,7 @@ const server = createServer((req, res) => {
     if (req.method === "GET" && p === "/api/v1/view") return apiView(res);
     if (req.method === "GET" && p === "/api/stream") return apiStream(req, res);
     if (req.method === "GET" && p === "/api/daemon") return apiDaemon(res);
+    if (req.method === "GET" && p === "/api/approvals") return apiApprovals(res);
     if (req.method === "POST" && p === "/api/tasks") return apiTask(req, res);
     if (req.method === "DELETE" && p.match(/^\/api\/runs\/([^/]+)$/)) {
       const id = p.match(/^\/api\/runs\/([^/]+)$/)![1];
@@ -377,6 +484,11 @@ const server = createServer((req, res) => {
       const [, id, np] = m;
       if (!okId(id) || np.split("/").some(badSeg)) return err(res, 400, "bad path");
       return apiReply(req, res, id, np);
+    }
+    if (req.method === "POST" && (m = p.match(R.approve))) {
+      const [, id, np] = m;
+      if (!okId(id) || np.split("/").some(badSeg)) return err(res, 400, "bad path");
+      return apiApprove(req, res, id, np);
     }
     if (req.method === "GET" && (m = p.match(R.transcript))) {
       const [, id, np] = m;
@@ -411,3 +523,4 @@ const server = createServer((req, res) => {
 });
 
 server.listen(PORT, HOST, () => console.log(`[workbench] http://${HOST}:${PORT}  runs=${RUNS}`));
+

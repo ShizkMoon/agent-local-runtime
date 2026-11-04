@@ -442,6 +442,9 @@ button.stp-h:hover{background:var(--hov)}
   transition:background var(--t-ui) var(--e),transform var(--t-ui) var(--e-pop);
 }
 .send:hover{background:var(--brand-active)}
+/* 有未答 gate 时发送键转为「拒绝」语义（composer 的文字 = 拒绝 + 说明原因） */
+.send.danger{background:var(--fig)}
+.send.danger:hover{background:color-mix(in srgb,var(--fig) 86%,#000)}
 .send:active{transform:scale(.92)}
 .send svg{width:15px;height:15px}
 
@@ -548,6 +551,28 @@ button.stp-h:hover{background:var(--hov)}
 .incard.res.err .verdict::before{background:var(--fig)}
 .incard.gone{opacity:0}
 
+/* ============ S19 审批卡：命令原文（等宽）+ 一行为什么 + 服务端 opts + 自由输入（= 拒绝并说明） ============ */
+.incard.approve .cmd{
+  margin:0;padding:7px 9px;background:var(--s0);border:1px solid var(--ln);border-radius:var(--r-ctl);
+  font-family:var(--f-mono);font-size:12px;line-height:1.5;color:var(--t1);
+  white-space:pre-wrap;word-break:break-word;max-height:96px;overflow:auto;
+}
+.incard.approve .why{font-size:12px;line-height:1.5;color:var(--t3)}
+.incard.approve .fb{display:flex;gap:6px;margin-top:1px}
+.incard.approve .fb input{
+  flex:1;min-width:0;height:30px;background:var(--s0);border:1px solid var(--ln);border-radius:var(--r-ctl);
+  padding:0 9px;font-size:12.5px;color:var(--t1);transition:border-color var(--t-ui) var(--e);
+}
+.incard.approve .fb input:focus{outline:none;border-color:var(--ln-hi)}
+.incard.approve .fb input::placeholder{color:var(--t3)}
+.incard.approve .fb .go{
+  height:30px;padding:0 11px;border:1px solid var(--ln);border-radius:var(--r-ctl);
+  font-size:12.5px;color:var(--t2);background:transparent;
+}
+.incard.approve .fb .go:hover{background:var(--hov);color:var(--t1);border-color:var(--ln-hi)}
+/* 卡片刚出现 500ms 内 Enter 不生效（防误批）：opt 用 .arming 提示，不改变布局 */
+.incard.approve.arming .opt{opacity:.55}
+
 .fadein{animation:fade var(--t-med) var(--e)}
 @keyframes fade{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
 </style>
@@ -622,8 +647,10 @@ button.stp-h:hover{background:var(--hov)}
 /* ================= 活数据：GET /api/v1/view + SSE 触发刷新 ================= */
 var RUNS = [];      /* [{id,title,status,dur,snippet,req,obj,sum,chips,tree,arts}] */
 var INBOX = [];     /* [{id,t,d,crumb,opts,gate:{run,nm,pd,sn,id}}] */
+var APPROVALS = []; /* S19 审批卡（gate-req.json）：[{id,run,path,tool,target,reason,args,opts:[{label,decision,scope,hint}],arm_at}] */
 var SETTLED = [];   /* [[标题, 时间]] */
 var resolvedIds = {}; /* 本地已裁决、等下一次 view 校准的 inbox id */
+var approveArmAt = 0; /* 新审批卡出现后 500ms 内 Enter 不生效（防误批） */
 
 var ST_LABEL = {working:"进行中", input:"等你回复", done:"已完成", queued:"排队中", dep:"等依赖", failed:"失败"};
 var WB_LABEL = {"person:answer":"你的回复", "dependency":"上游子任务"};
@@ -651,8 +678,54 @@ function scheduleFetch(){
 function fetchView(){
   return fetch("/api/v1/view", {cache:"no-store"})
     .then(function(r){ if(!r.ok) throw new Error("HTTP "+r.status); return r.json(); })
-    .then(applyView)
+    .then(function(d){ applyView(d); return fetchApprovals(); })
     .catch(function(){ /* 服务暂不可达：保留当前画面，等下一轮 */ });
+}
+
+/* ---------- S19 审批卡：GET /api/approvals（gate 写的卡，opts 由服务端生成，前端只渲染） ---------- */
+function fetchApprovals(){
+  return fetch("/api/approvals", {cache:"no-store"})
+    .then(function(r){ if(!r.ok) throw new Error("HTTP "+r.status); return r.json(); })
+    .then(applyApprovals)
+    .catch(function(){ /* 桥暂不可达：保留当前卡 */ });
+}
+function applyApprovals(d){
+  var list = (Array.isArray(d && d.approvals) ? d.approvals : []).filter(function(a){ return a && !resolvedIds[a.id]; });
+  var prev = {};
+  APPROVALS.forEach(function(a){ prev[a.id] = a; });
+  var fresh = false;
+  list.forEach(function(a){
+    if(prev[a.id]) a.arm_at = prev[a.id].arm_at;   /* 已在列表里的卡沿用武装时间，刷新不重新计时 */
+    else { a.arm_at = Date.now() + 500; fresh = true; }
+  });
+  if(fresh) approveArmAt = Date.now() + 500;
+  APPROVALS = list;
+  mergeApprovalsIntoInbox();
+  renderInbox();
+  syncComposer();
+  notifyNewInbox();
+}
+/* view 的 inbox 是 gate.json（ev_gate 提问）；审批卡是 gate-req.json —— 同列表、不同语义 */
+function mergeApprovalsIntoInbox(){
+  INBOX = INBOX.filter(function(c){ return c.kind !== "approve"; }).concat(APPROVALS.map(function(a){
+    return { id:a.id, kind:"approve", t:approvalTitle(a), d:"", opts:a.opts||[], crumb:a.crumb, ap:a };
+  }));
+}
+function approvalTitle(a){
+  var t = a.tool || "工具";
+  return a.target ? t + " · " + a.target : t;
+}
+function pendingApprovalForComposer(){
+  if(!APPROVALS.length) return null;
+  var rid = (RUNS[currentRun]||{}).id;
+  for(var i=0;i<APPROVALS.length;i++) if(APPROVALS[i].run === rid) return APPROVALS[i];
+  return APPROVALS[0];
+}
+function syncComposer(){
+  var ap = pendingApprovalForComposer();
+  var el = $("#cText"), btn = $("#sendBtn");
+  if(el) el.placeholder = ap ? "回复 = 拒绝并说明原因（不会作为新消息发出）" : "派发任务，或回复等待中的问题…";
+  if(btn) btn.classList.toggle("danger", !!ap);
 }
 function startPoll(){ if(!pollTimer) pollTimer = setInterval(fetchView, 5000); }
 function stopPoll(){ if(pollTimer){ clearInterval(pollTimer); pollTimer = null; } }
@@ -707,6 +780,7 @@ function applyView(d){
 
   RUNS    = Array.isArray(d.runs)    ? d.runs    : [];
   INBOX   = (Array.isArray(d.inbox) ? d.inbox : []).filter(function(c){ return !(c && resolvedIds[c.id]); });
+  mergeApprovalsIntoInbox();   /* S19：审批卡与 view 的 gate 卡同列表（view 不含 gate-req，故由这里并入） */
   SETTLED = Array.isArray(d.settled) ? d.settled : [];
   notifyNewInbox();
 
@@ -1255,21 +1329,75 @@ function renderBadge(){
 }
 function renderInbox(){
   $("#pane-inbox").innerHTML = INBOX.length ? INBOX.map(function(c){
-    var h = '<article class="incard" id="'+esc(c.id)+'">';
-    if(c.crumb) h += '<div class="icrumb">'+(c.crumb||[]).map(function(x,i){return (i?'<i>›</i>':'')+(i===c.crumb.length-1?'<b>'+esc(x)+'</b>':esc(x));}).join("")+'</div>';
-    h += '<h3>'+esc(c.t)+'</h3>';
-    h += '<p class="desc">'+(c.d||"")+'</p>';   /* d：本地桥受信 HTML（含 <code>） */
-    h += '<div class="opts">'+(c.opts||[]).map(function(o){
-      var kind = {"danger":1,"solid":1}[o[1]] ? o[1] : "";
-      return '<button class="opt '+kind+'" data-v="'+esc(o[2])+'" data-l="'+esc(o[0])+'">'+esc(o[0])+'</button>';
-    }).join("")+'</div>';
-    h += '<div class="verdict"></div></article>';
-    return h;
+    return c.kind === "approve" ? approvalCardHtml(c) : gateCardHtml(c);
   }).join("") : '<div class="empty-note">没有需要你处理的事</div>';
   each("#pane-inbox .opt",function(el){
-    el.addEventListener("click",function(){ resolveCard(el.closest(".incard"), el.dataset.v, el.dataset.l); });
+    el.addEventListener("click",function(){
+      var card = el.closest(".incard");
+      var c = INBOX.filter(function(x){ return x.id === card.id; })[0];
+      if(!c) return;
+      if(c.kind === "approve"){ var o = c.opts[+el.dataset.i]; decideApproval(card, c, {decision:o.decision, remember:o.scope}); }
+      else resolveCard(card, el.dataset.v, el.dataset.l);
+    });
+  });
+  each("#pane-inbox .incard.approve .fb input",function(el){
+    el.addEventListener("keydown",function(e){
+      var card = el.closest(".incard");
+      var c = INBOX.filter(function(x){ return x.id === card.id; })[0];
+      if(!c) return;
+      if(e.key === "Escape"){ e.preventDefault(); e.stopPropagation(); if(Date.now() < c.ap.arm_at) return;
+        decideApproval(card, c, {decision:"rejected"}, "已拒绝"); return; }
+      if(e.key !== "Enter" || e.shiftKey) return;
+      e.preventDefault();
+      if(Date.now() < c.ap.arm_at) return;   /* 卡片出现 500ms 内 Enter 不生效（防误批） */
+      var v = el.value.trim();
+      decideApproval(card, c, v ? {decision:"rejected", feedback:v} : {decision:"allowed-once"},
+                     v ? "已拒绝，并回注说明" : "已允许一次");
+    });
+  });
+  each("#pane-inbox .incard.approve .fb .go",function(b){
+    b.addEventListener("click",function(){
+      var card = b.closest(".incard");
+      var c = INBOX.filter(function(x){ return x.id === card.id; })[0];
+      if(!c) return;
+      var inp = card.querySelector(".fb input");
+      var v = inp ? inp.value.trim() : "";
+      decideApproval(card, c, v ? {decision:"rejected", feedback:v} : {decision:"rejected"}, v ? "已拒绝，并回注说明" : "已拒绝");
+    });
   });
   renderBadge();
+}
+/* 普通 inbox 卡（gate.json / ev_gate 提问）：文案与选项来自 view.ts 投影 */
+function gateCardHtml(c){
+  var h = '<article class="incard" id="'+esc(c.id)+'">';
+  if(c.crumb) h += '<div class="icrumb">'+(c.crumb||[]).map(function(x,i){return (i?'<i>›</i>':'')+(i===c.crumb.length-1?'<b>'+esc(x)+'</b>':esc(x));}).join("")+'</div>';
+  h += '<h3>'+esc(c.t)+'</h3>';
+  h += '<p class="desc">'+(c.d||"")+'</p>';   /* d：本地桥受信 HTML（含 <code>） */
+  h += '<div class="opts">'+(c.opts||[]).map(function(o){
+    var kind = {"danger":1,"solid":1}[o[1]] ? o[1] : "";
+    return '<button class="opt '+kind+'" data-v="'+esc(o[2])+'" data-l="'+esc(o[0])+'">'+esc(o[0])+'</button>';
+  }).join("")+'</div>';
+  h += '<div class="verdict"></div></article>';
+  return h;
+}
+/* S19 审批卡：命令原文（等宽）+ 一行为什么 + 服务端 opts + 自由输入（= 拒绝并说明） */
+function approvalCardHtml(c){
+  var a = c.ap;
+  var cmd = (a.args && (a.args.command || a.args.cmd)) || a.target || "";
+  var h = '<article class="incard approve" id="'+esc(a.id)+'">';
+  if(c.crumb) h += '<div class="icrumb">'+(c.crumb||[]).map(function(x,i){return (i?'<i>›</i>':'')+(i===c.crumb.length-1?'<b>'+esc(x)+'</b>':esc(x));}).join("")+'</div>';
+  h += '<h3>'+esc(approvalTitle(a))+'</h3>';
+  if(cmd) h += '<pre class="cmd">'+esc(cmd)+'</pre>';
+  h += '<p class="why">'+esc(a.reason||"")+'</p>';
+  h += '<div class="opts">'+(a.opts||[]).map(function(o,i){
+    var kind = o.decision === "rejected" ? "danger" : (o.scope ? "solid" : "");
+    return '<button class="opt '+kind+'" data-i="'+i+'" data-d="'+esc(o.decision)+'" data-l="'+esc(o.label)+'"'+
+           (o.hint?' title="'+esc(o.hint)+'"':'')+'>'+esc(o.label)+'</button>';
+  }).join("")+'</div>';
+  h += '<div class="fb"><input placeholder="拒绝并说明原因…（Enter 发送，Esc 拒绝）" enterkeyhint="send">'+
+       '<button class="go">拒绝</button></div>';
+  h += '<div class="verdict"></div></article>';
+  return h;
 }
 /* gate.id 形如 node:<root>/<path> → {run, path}；缺 id 时退回 run 下标 + 树节点路径 */
 function replyRef(c){
@@ -1319,6 +1447,52 @@ function resolveCard(card, verdict, label){
     .then(function(){ c.pending=false; settle(); scheduleFetch(); })
     .catch(fail);
 }
+/* S19：审批裁决 → POST .../approve（decision 落闭集；remember 由桥按 gate-req.opts 复核，伪造无效） */
+function decideApproval(card, c, body, label){
+  if(!c || c.done || c.pending) return;
+  var a = c.ap;
+  var verdict = label || (body.decision === "allowed-once"
+    ? (body.remember ? "已记住这类资源" : "已允许一次")
+    : body.decision === "rejected" ? "已拒绝" : "已取消");
+  c.pending = true;
+  fetch("/api/runs/"+encodeURIComponent(a.run)+"/node/"+encPath(a.path)+"/approve",
+        {method:"POST", headers:{"content-type":"application/json"}, body:JSON.stringify(body)})
+    .then(function(r){ if(!r.ok) throw new Error("HTTP "+r.status); return r.json(); })
+    .then(function(d){
+      c.pending = false; c.done = true; resolvedIds[c.id] = 1;
+      APPROVALS = APPROVALS.filter(function(x){ return x.id !== c.id; });
+      if(card){
+        card.classList.add("res");
+        var v = card.querySelector(".verdict");
+        if(v) v.textContent = (d && d.remember) ? "已记住这类资源" : verdict;
+        setTimeout(function(){ card.classList.add("gone"); }, 900);
+      }
+      renderBadge();
+      setTimeout(function(){
+        INBOX = INBOX.filter(function(x){ return x.id !== c.id; });
+        renderInbox(); syncComposer();
+      }, 1100);
+      scheduleFetch();
+    })
+    .catch(function(){
+      c.pending = false;
+      if(card){
+        card.classList.add("res","err");
+        var v = card.querySelector(".verdict");
+        if(v) v.textContent = "提交失败 · 请重试";
+        setTimeout(function(){ card.classList.remove("res","err"); }, 1600);
+      }
+    });
+}
+/* S19 composer：挂起时输入 = 拒绝 + 说明原因（写 gate-ans），不是新消息 */
+function rejectViaComposer(a, text){
+  if(Date.now() < approveArmAt) return;   /* 卡出现 500ms 内 Enter 不生效（防误批） */
+  var c = INBOX.filter(function(x){ return x.id === a.id; })[0];
+  decideApproval(document.getElementById(a.id), c,
+    text ? {decision:"rejected", feedback:text} : {decision:"rejected"},
+    text ? "已拒绝，并回注说明" : "已拒绝");
+}
+
 /* 深层 gate 解除 → 节点、祖先、任务状态全部从数据重算（乐观更新，下次 view 校准） */
 function resolveGate(g){
   var r = RUNS[g.run];
@@ -1402,6 +1576,13 @@ cText.addEventListener("input",function(){
 });
 $("#sendBtn").addEventListener("click",function(){
   var v = cText.value.trim();
+  var pend = pendingApprovalForComposer();
+  if(pend){                     /* 有未答 gate：文字 = 拒绝并说明原因，不是新任务 */
+    if(!v){ cText.focus(); return; }
+    cText.value = ""; cText.style.height = "";
+    rejectViaComposer(pend, v);
+    return;
+  }
   if(!v){ cText.focus(); return; }
   var ci = $("#colInner");
   var div = document.createElement("div");
@@ -1433,7 +1614,11 @@ $("#sendBtn").addEventListener("click",function(){
     });
 });
 cText.addEventListener("keydown",function(e){
-  if(e.key==="Enter"&&!e.shiftKey){ e.preventDefault(); $("#sendBtn").click(); }
+  if(e.key==="Enter"&&!e.shiftKey){
+    e.preventDefault();
+    if(pendingApprovalForComposer() && Date.now()<approveArmAt) return;   /* 卡刚出现 500ms 内 Enter 不生效 */
+    $("#sendBtn").click();
+  }
 });
 $("#newBtn").addEventListener("click",function(){ cText.focus(); });
 
@@ -1444,6 +1629,7 @@ renderRun(true);
 renderArts();
 renderSubs(null);
 renderDset();
+syncComposer();
 /* 通知权限不在加载时申请：等用户第一次真的派发任务再问（见 composer），
    否则 WebView2 一开窗就弹权限框，像 bug 一样打断人。 */
 fetchView();
@@ -1451,3 +1637,4 @@ connectSSE();
 </script>
 </body>
 </html>
+

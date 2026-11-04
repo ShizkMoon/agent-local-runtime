@@ -37,6 +37,8 @@ export interface SpecEnvelope {
   approve?: string[];     // 需审批的工具名/前缀模式（命中才弹 gate）
   deny?: string[];        // 恒拒工具模式：命中即 block，不弹窗
   deny_paths?: string[];  // protected paths：args 里路径命中即 block（敏感目录恒守门）
+  // S19：必问且不可 session 记住（与 deny 是两种语义）；判定序 deny → restricted → grant → approve
+  restricted_paths?: string[];
   rules?: { pattern: string; message: string }[];  // args 正则守门：命中 → block + message 回注模型
   skills?: string[];      // 显式挂载的 skill 名（daemon 逐条 --skill <aica-pi>/skills/<name>）
 }
@@ -46,6 +48,9 @@ export interface ResultEnvelope {
   type: "result";
   status: NodeStatus;
   summary: string;
+  // 结局原因：闭集里的自由串（budget exceeded / timeout / aborted by user / gate unavailable …），
+  // 与 status 配合成「结局 = 状态 + 原因」；view/工作台用它显示人话，不拿它做分支判断
+  reason?: string;
   refs?: string[];
   checks?: { cmd: string; exit: number }[];
   children?: { kind: string; subject: string }[];  // 仅 status=split
@@ -68,6 +73,51 @@ export interface EventRecord {
 
 export function nodeId(rootId: string, path: string): string {
   return `node:${rootId}/${path}`;
+}
+
+// ---- S19 审批协议：gate.ts 写 gate-req.json（卡 + 服务端生成的 opts），
+//      应答者（workbench）写 gate-ans.json。决策闭集是唯一真相，运行时值在 gate.ts::GATE_DECISIONS。
+//      记住的是「这次命中的资源」{tool,tier,target}，不是整个工具名。
+export type GateDecision = "allowed-once" | "rejected" | "cancelled" | "unavailable";
+export type ApprovalTier = "read" | "write" | "exec";
+
+export interface GateGrant {
+  tool: string;           // 命中的工具（不是通配工具族）
+  tier: ApprovalTier;     // 记录当时的档位：写授权不覆盖执行
+  target: string;         // 命中的资源：命令串（整串相等）或归一化路径（目录级前缀）
+  ts?: string;
+}
+
+/** 卡上的动作：由 gate 生成，前端只渲染不硬编码 */
+export interface GateOpt {
+  label: string;
+  decision: GateDecision;
+  remember?: GateGrant | null;   // 仅「记住这类」有；文案必须写清记住什么
+  hint?: string;
+}
+
+export interface GateRequest {
+  v?: number;
+  call_id: string;
+  tool: string;
+  tier: ApprovalTier;
+  target: string;
+  restricted: boolean;     // 必问且不可记住（控制面 / restricted_paths）
+  rememberable: boolean;
+  reason: string;          // 卡上「为什么要跑它」一行
+  hit?: string;
+  args?: unknown;
+  targets?: string[];
+  opts: GateOpt[];
+  asked_at: string;
+}
+
+export interface GateAnswer {
+  decision: GateDecision;  // 闭集；坏值/缺失一律按 unavailable 处理（fail-closed）
+  feedback?: string;       // rejected 时原样回注模型（不要写 "denied"）
+  remember?: GateGrant | null;
+  by?: string;
+  at?: string;
 }
 
 // uuid5(task.uuid, rule, attempt) 同款：sha1 截位伪 uuid5，足够单机幂等
