@@ -191,8 +191,13 @@ button:focus:not(:focus-visible){outline:none}
   border-radius:var(--r-ctl);transition:background var(--t-ui) var(--e),color var(--t-ui) var(--e);
 }
 .set-row:hover{background:var(--hov);color:var(--t1)}
-.set-row .t{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis}
-.set-row .tm{flex:none;font-family:var(--f-mono);font-size:12px;color:var(--t3);font-variant-numeric:tabular-nums}
+.set-open{display:flex;align-items:center;gap:10px;flex:1;min-width:0;padding:0}
+.set-open .t{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis}
+.set-open .tm{flex:none;font-family:var(--f-mono);font-size:12px;color:var(--t3);font-variant-numeric:tabular-nums}
+.set-del{flex:none;width:20px;height:20px;border-radius:var(--r-ctl);color:var(--t3);opacity:0;
+  transition:opacity var(--t-ui) var(--e),color var(--t-ui) var(--e);font-size:13px;line-height:1}
+.set-row:hover .set-del{opacity:1}
+.set-del:hover{color:var(--fig)}
 
 /* ============ 中栏：thread ============ */
 #center{display:flex;flex-direction:column;min-width:0;background:var(--s1)}
@@ -650,17 +655,31 @@ function pillOf(st){
   return '<span class="pill"><i></i>空闲</span>';
 }
 function renderSidebar(){
-  $("#runList").innerHTML = RUNS.length ? RUNS.map(function(r,i){
+  var live = RUNS.map(function(r,i){ return [r,i]; }).filter(function(p){ return p[0].status!=="done"; });
+  $("#runList").innerHTML = live.length ? live.map(function(p){
+    var r = p[0], i = p[1];
     return '<button class="run-card'+(i===currentRun?' on':'')+'" data-run="'+i+'">'+
       '<span class="r1">'+pillOf(r.status)+'<span class="dur num">'+esc(r.dur)+'</span></span>'+
       '<span class="ttl">'+esc(r.title)+'</span>'+
       '<span class="meta">'+esc(r.snippet)+'</span></button>';
   }).join("") : '<div class="empty-note">暂无运行中的任务</div>';
   $("#settledList").innerHTML = SETTLED.length ? SETTLED.map(function(s,i){
-    return '<button class="set-row" data-s="'+i+'"><span class="t">'+esc(s[0])+'</span><span class="tm">'+esc(s[1])+'</span></button>';
+    return '<div class="set-row"><button class="set-open" data-s="'+i+'"><span class="t">'+esc(s[0])+'</span><span class="tm">'+esc(s[1])+'</span></button>'+
+      '<button class="set-del" data-s="'+i+'" aria-label="删除记录">×</button></div>';
   }).join("") : '<div class="empty-note">暂无记录</div>';
-  each("#settledList .set-row",function(el){
-    el.addEventListener("click",function(){ openSettled(SETTLED[+el.dataset.s]); });
+  each("#settledList .set-open",function(el){
+    el.addEventListener("click",function(){
+      var s = SETTLED[+el.dataset.s];
+      for(var i=0;i<RUNS.length;i++) if(RUNS[i].id===s[2]){ selectRun(i); return; }
+      openSettled(s);   /* run 不在列表里才退回只读 sheet */
+    });
+  });
+  each("#settledList .set-del",function(el){
+    el.addEventListener("click",function(e){
+      e.stopPropagation();
+      var s = SETTLED[+el.dataset.s]; if(!s||!s[2]) return;
+      fetch("/api/runs/"+encodeURIComponent(s[2]),{method:"DELETE"}).then(scheduleFetch);
+    });
   });
   each(".run-card",function(el){
     el.addEventListener("click",function(){ selectRun(+el.dataset.run); });
@@ -747,8 +766,9 @@ function renderRun(silent){
   /* thinking 指示：working = 3 clay dots 动画；input = 静置等待行 */
   if(r.status==="working"){
     h += '<div class="think"><span class="td"><i></i><i></i><i></i></span><span class="tk">思考中 · 正在归纳子节点结论…</span></div>';
-  }else if(r.status==="input"){
-    h += '<div class="think"><span class="td still"><i></i><i></i><i></i></span><span class="tk">已暂停 · 等你裁决后继续</span></div>';
+  }else{
+    h += '<div class="think"><span class="td still"><i></i><i></i><i></i></span><span class="tk">'+
+      (r.status==="done" ? "已完成" : r.status==="failed" ? "已失败" : "已暂停 · 等你裁决后继续")+'</span></div>';
   }
 
   var ts = $("#threadScroll");

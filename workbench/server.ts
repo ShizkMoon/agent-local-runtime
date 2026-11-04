@@ -4,7 +4,7 @@
 // 无依赖（node:http + node:fs + node:child_process），供 Edge --app 壳使用；
 // 接口面保持稳定，日后 Tauri 壳只换窗口层、不动此桥。
 import { createServer } from "node:http";
-import { existsSync, readdirSync, readFileSync, statSync, watch, appendFileSync, mkdirSync, openSync, readSync, closeSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync, watch, appendFileSync, mkdirSync, openSync, readSync, closeSync, rmSync } from "node:fs";
 import { join, normalize, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFile, execFileSync, spawn, type ChildProcess } from "node:child_process";
@@ -264,12 +264,10 @@ function apiView(res: any): void {
     const waiting = nodes.filter(n => n.st === "input");
     const allDone = nodes.length > 0 && nodes.every(n => n.r?.status === "done");
     const ended = nodes.map(n => n.r?.finished_at).filter(Boolean).sort().pop() as string | undefined;
-    if (allDone) {   // 全部节点 done 的 run 不进 runs，进 settled
-      settled.push([meta?.subject ?? rootId, hhmm(ended ?? meta?.created_at ?? new Date().toISOString()), rootId]);
-      continue;
-    }
-    // 聚合：有等待→input；有失败→failed；否则 working（挂在进行中的 run 才有活着的节点）
-    const status = waiting.length ? "input" : nodes.some(n => n.r?.status === "failed") ? "failed" : "working";
+    // run 不自动隐藏：done/failed 也留在 runs 里可打开，只有显式 DELETE 才消失
+    const status = allDone ? "done" : waiting.length ? "input"
+                 : nodes.some(n => n.r?.status === "failed") ? "failed" : "working";
+    if (allDone) settled.push([meta?.subject ?? rootId, hhmm(ended ?? meta?.created_at ?? new Date().toISOString()), rootId]);
     const rootNode = nodes.find(n => n.path === "root") ?? nodes[0];
     // chips：根 spec.accept → [状态,条文]。简化判定：spec.accept_idx===i 的节点 result 存在即 verified、failed 即 failed、无则 pending
     const chips = (rootNode?.spec?.accept ?? []).map((a: string, i: number) => {
@@ -360,6 +358,13 @@ function ensureDaemon(): boolean {
     daemonCache = { at: Date.now(), running: true };
     return true;
   } catch { return false; }
+}
+
+function apiDeleteRun(res: any, rootId: string): void {
+  const dir = safeJoin(rootId);
+  if (!dir || !existsSync(dir)) return err(res, 404, "run not found");
+  try { rmSync(dir, { recursive: true, force: true }); } catch (e) { return err(res, 500, String(e)); }
+  json(res, 200, { ok: true });
 }
 
 function apiDaemon(res: any): void {
@@ -475,6 +480,11 @@ const server = createServer((req, res) => {
     if (req.method === "GET" && p === "/api/stream") return apiStream(req, res);
     if (req.method === "GET" && p === "/api/daemon") return apiDaemon(res);
     if (req.method === "POST" && p === "/api/tasks") return apiTask(req, res);
+    if (req.method === "DELETE" && p.match(/^\/api\/runs\/([^/]+)$/)) {
+      const id = p.match(/^\/api\/runs\/([^/]+)$/)![1];
+      if (!okId(id)) return err(res, 400, "bad id");
+      return apiDeleteRun(res, id);
+    }
     let m: RegExpMatchArray | null;
     if (req.method === "GET" && (m = p.match(R.tree))) {
       if (!okId(m[1])) return err(res, 400, "bad id");
