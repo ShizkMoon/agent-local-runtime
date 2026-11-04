@@ -1,0 +1,10 @@
+{
+  "id": "node:wb-fixture-demo1/root/summarize",
+  "type": "result",
+  "status": "failed",
+  "summary": "输入 ref 未物化到节点目录，read 失败退出",
+  "spent": {
+    "tokens": 900
+  },
+  "finished_at": "2026-11-03T08:10:09.640Z"
+}

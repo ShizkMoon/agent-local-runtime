@@ -1,0 +1,7 @@
+{
+  "root_id": "wb-fixture-demo1",
+  "created_at": "2026-11-03T08:10:09.640Z",
+  "kind": "meta.test",
+  "subject": "workbench 冒烟夹具",
+  "plan_version": 1
+}

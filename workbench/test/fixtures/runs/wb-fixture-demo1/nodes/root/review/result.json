@@ -1,0 +1,7 @@
+{
+  "id": "node:wb-fixture-demo1/root/review",
+  "finished_at": "2026-11-04T06:05:12.193Z",
+  "status": "failed",
+  "summary": "Worker 异常退出（code -1）：Error: spawn claude ENOENT——详见节点 events.jsonl",
+  "type": "result"
+}

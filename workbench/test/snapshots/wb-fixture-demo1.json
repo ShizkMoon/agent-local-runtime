@@ -1,0 +1,186 @@
+{
+ "runs": [
+  {
+   "id": "wb-fixture-demo1",
+   "title": "workbench 冒烟夹具",
+   "status": "failed",
+   "dur": "1315:03",
+   "spent": 7960,
+   "snippet": "Worker 退出（code -1） · Error: spawn claude ENOENT",
+   "req": "workbench 冒烟夹具",
+   "obj": "收集 aica runtime 文档并给出执行摘要",
+   "sum": "拆分为 fetch / summarize 两个子节点",
+   "chips": [
+    [
+     "pending",
+     "两个子节点均产出摘要"
+    ]
+   ],
+   "tree": [
+    {
+     "l": 2,
+     "acl": 0,
+     "st": "done",
+     "nm": "读取 runtime 源文件并整理接口清",
+     "d": "接口清单已产出：artifacts/接口清单.md（envelope + runs 共 8 个导出）",
+     "el": "490:10",
+     "path": "root/fetch",
+     "sum": "接口清单已产出：artifacts/接口清单.md（envelope + runs 共 8 个导出）",
+     "steps": [
+      {
+       "kind": "tool",
+       "name": "ls",
+       "args": "{\"path\":\"src/\"}",
+       "st": "ok",
+       "exit": null,
+       "ms": null,
+       "out": [
+        "cli.ts",
+        "daemon.ts",
+        "envelope.ts",
+        "runs.ts"
+       ],
+       "total": 4,
+       "truncated": false,
+       "capped": false,
+       "ref": null,
+       "ts": "2026-11-03T08:05:59.642Z",
+       "i": 2,
+       "call_id": null
+      },
+      {
+       "kind": "tool",
+       "name": "read",
+       "args": "{\"path\":\"src/envelope.ts\"}",
+       "st": "ok",
+       "exit": null,
+       "ms": null,
+       "out": [
+        "export type NodeStatus = ... SpecEnvelope { id, goal, accept, ... }"
+       ],
+       "total": 1,
+       "truncated": false,
+       "capped": false,
+       "ref": null,
+       "ts": "2026-11-03T08:06:09.642Z",
+       "i": 4,
+       "call_id": null
+      },
+      {
+       "kind": "tool",
+       "name": "write",
+       "args": "{\"path\":\"artifacts/接口清单.md\"}",
+       "st": "ok",
+       "exit": null,
+       "ms": null,
+       "out": [
+        "ok"
+       ],
+       "total": 1,
+       "truncated": false,
+       "capped": false,
+       "ref": null,
+       "ts": "2026-11-03T08:06:29.642Z",
+       "i": 6,
+       "call_id": null
+      }
+     ],
+     "out": [
+      "接口清单.md"
+     ],
+     "live": false,
+     "cur": "exit",
+     "spent": 5820,
+     "wait": null,
+     "todo": null,
+     "wb": "",
+     "turn": {
+      "state": "completed",
+      "reason": "接口清单已产出：artifacts/接口清单.md（envelope + runs 共 8 个导出）",
+      "code": 0
+     }
+    },
+    {
+     "l": 2,
+     "acl": 0,
+     "st": "failed",
+     "nm": "人工确认汇总口径后继续",
+     "d": "Worker 异常退出（code -1）：Error: spawn claude ENOENT——详见节点 events.jsonl",
+     "el": "1805:12",
+     "path": "root/review",
+     "sum": "Worker 异常退出（code -1）：Error: spawn claude ENOENT——详见节点 events.jsonl",
+     "steps": [],
+     "out": [],
+     "live": false,
+     "cur": "exit",
+     "spent": null,
+     "wait": null,
+     "todo": null,
+     "wb": "",
+     "turn": {
+      "state": "failed",
+      "reason": "Worker 异常退出（code -1）：Error: spawn claude ENOENT——详见节点 events.jsonl",
+      "code": -1
+     }
+    },
+    {
+     "l": 2,
+     "acl": 0,
+     "st": "failed",
+     "nm": "汇总 fetch 产出为执行摘要",
+     "d": "输入 ref 未物化到节点目录，read 失败退出",
+     "el": "490:10",
+     "path": "root/summarize",
+     "sum": "输入 ref 未物化到节点目录，read 失败退出",
+     "steps": [
+      {
+       "kind": "tool",
+       "name": "read",
+       "args": "{\"path\":\"artifacts/接口清单.md\"}",
+       "st": "err",
+       "exit": null,
+       "ms": null,
+       "out": [
+        "ENOENT: no such file, artifacts/接口清单.md（cwd 为节点目录，ref 未透传）"
+       ],
+       "total": 1,
+       "truncated": false,
+       "capped": false,
+       "ref": null,
+       "ts": "2026-11-03T08:07:44.642Z",
+       "i": 1,
+       "call_id": null
+      }
+     ],
+     "out": [],
+     "live": false,
+     "cur": "exit",
+     "spent": 900,
+     "wait": null,
+     "todo": null,
+     "wb": "",
+     "turn": {
+      "state": "failed",
+      "reason": "输入 ref 未物化到节点目录，read 失败退出",
+      "code": 1
+     }
+    }
+   ],
+   "arts": [
+    {
+     "fn": "root/fetch/接口清单.md",
+     "sz": "456 B",
+     "body": "# 接口清单\n\n## envelope.ts\n\n| 类型 | 字段 |\n|---|---|\n| SpecEnvelope | id, type, goal, inputs, **accept**, budget, tools, reply |\n| ResultEnvelope | id, status, summary, refs, checks, children, spent |\n| EventRecord | ts, kind, data |\n\n## runs.ts\n\n- `createRun` / `writeSpec` / `writeResult` / `appendEvent`\n- `pendingNodes`：有 spec 无 result = 待拉起\n\n> 备注：事件 kind 含 `tool_call` `tool_result` `message` `spawn` `exit` `gate`。\n"
+    }
+   ],
+   "steps": [],
+   "turn": {
+    "state": "failed",
+    "reason": "Worker 异常退出（code -1）：Error: spawn claude ENOENT——详见节点 events.jsonl",
+    "code": -1
+   }
+  }
+ ],
+ "inbox": [],
+ "settled": []
+}

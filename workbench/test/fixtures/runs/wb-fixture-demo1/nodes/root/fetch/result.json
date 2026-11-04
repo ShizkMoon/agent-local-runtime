@@ -1,0 +1,20 @@
+{
+  "id": "node:wb-fixture-demo1/root/fetch",
+  "type": "result",
+  "status": "done",
+  "summary": "接口清单已产出：artifacts/接口清单.md（envelope + runs 共 8 个导出）",
+  "refs": [
+    "node:wb-fixture-demo1/root/fetch/artifacts/接口清单.md"
+  ],
+  "checks": [
+    {
+      "cmd": "ls artifacts",
+      "exit": 0
+    }
+  ],
+  "spent": {
+    "tokens": 5820,
+    "minutes": 2
+  },
+  "finished_at": "2026-11-03T08:10:09.640Z"
+}

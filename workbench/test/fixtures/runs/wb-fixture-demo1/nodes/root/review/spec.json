@@ -1,0 +1,21 @@
+{
+  "id": "node:wb-fixture-demo1/root/review",
+  "parent": "node:wb-fixture-demo1/root",
+  "type": "assign",
+  "agent": "claude",
+  "goal": "人工确认汇总口径后继续",
+  "accept": [
+    "收到人工确认"
+  ],
+  "tools": [],
+  "reply": [
+    {
+      "text": "按接口汇总",
+      "ts": "2026-11-03T20:58:38.900Z"
+    },
+    {
+      "text": "sse-ping",
+      "ts": "2026-11-03T21:00:09.279Z"
+    }
+  ]
+}

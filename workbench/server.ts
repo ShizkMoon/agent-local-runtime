@@ -4,10 +4,12 @@
 // 无依赖（node:http + node:fs + node:child_process），供 Edge --app 壳使用；
 // 接口面保持稳定，日后 Tauri 壳只换窗口层、不动此桥。
 import { createServer } from "node:http";
-import { existsSync, readdirSync, readFileSync, statSync, watch, appendFileSync, mkdirSync, openSync, readSync, closeSync, rmSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync, watch, appendFileSync, mkdirSync, openSync, rmSync } from "node:fs";
 import { join, normalize, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFile, execFileSync, spawn, type ChildProcess } from "node:child_process";
+// S16：视图投影住在 view.ts（纯函数，runsDir 由参数传入）；本文件只做 HTTP 胶水
+import { buildView, okId, badSeg, readJson, safeJoinIn, nodePaths, nodeStatus, evHint, runPulse } from "./view.ts";
 
 const PORT = Number(process.env.WB_PORT ?? 4399);
 const HOST = "127.0.0.1";
@@ -31,88 +33,8 @@ function json(res: any, code: number, data: unknown): void {
   res.end(body);
 }
 function err(res: any, code: number, msg: string): void { json(res, code, { error: msg }); }
-function readJson<T>(file: string): T | null {
-  try { return existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) as T : null; } catch { return null; }
-}
-// 路径安全：拒绝 .. 与绝对路径注入；返回 RUNS 内 resolved 路径或 null
-function safeJoin(...parts: string[]): string | null {
-  const p = normalize(join(RUNS, ...parts));
-  return p.startsWith(normalize(RUNS) + sep) || p === normalize(RUNS) ? p : null;
-}
-const badSeg = (s: string) => !s || s.includes("..") || s.includes("\\") || /[<>:"|?*\x00-\x1f]/.test(s);
-const okId = (s: string) => /^[A-Za-z0-9._-]+$/.test(s);
-
-// 节点目录递归扫描（兼容未来 nodes/a/b 嵌套；当前 runs.ts 为扁平单层）
-function nodePaths(rootId: string): string[] {
-  const nodesRoot = safeJoin(rootId, "nodes");
-  if (!nodesRoot || !existsSync(nodesRoot)) return [];
-  const out: string[] = [];
-  const walk = (dir: string, rel: string, depth: number) => {
-    if (depth > 6) return;
-    for (const ent of readdirSync(dir, { withFileTypes: true })) {
-      if (!ent.isDirectory()) continue;
-      if (ent.name === "artifacts") continue;
-      const childRel = rel ? `${rel}/${ent.name}` : ent.name;
-      const childDir = join(dir, ent.name);
-      if (existsSync(join(childDir, "spec.json")) || existsSync(join(childDir, "result.json")) || existsSync(join(childDir, "events.jsonl"))) {
-        out.push(childRel);
-      }
-      walk(childDir, childRel, depth + 1); // 节点目录内仍可能有嵌套子节点（path=root/fetch）
-    }
-  };
-  walk(nodesRoot, "", 0);
-  return out.sort();
-}
-
-function nodeStatus(rootId: string, path: string): { status: string; summary?: string; finished_at?: string } {
-  const dir = safeJoin(rootId, "nodes", ...path.split("/"))!;
-  const r = readJson<any>(join(dir, "result.json"));
-  if (r) return { status: r.status ?? "?", summary: r.summary, finished_at: r.finished_at };
-  return { status: existsSync(join(dir, "spec.json")) ? "running" : "empty" };
-}
-
-/** 读 events.jsonl 尾部 ~8KB 的最后一条可解析事件（append-only，尾行即最新） */
-function tailEvent(file: string): any | null {
-  try {
-    const size = statSync(file).size;
-    if (!size) return null;
-    const fd = openSync(file, "r");
-    try {
-      const buf = Buffer.alloc(Math.min(size, 8192));
-      readSync(fd, buf, 0, buf.length, size - buf.length);
-      const lines = buf.toString("utf8").split("\n");
-      for (let i = lines.length - 1; i >= 0; i--) {
-        const l = lines[i].trim();
-        if (!l) continue;
-        try { const ev = JSON.parse(l); if (ev?.ts) return ev; } catch { /* 半截首行跳过 */ }
-      }
-    } finally { closeSync(fd); }
-  } catch { /* 读失败当无事件 */ }
-  return null;
-}
-
-function evHint(ev: any): string {
-  const d = ev?.data ?? {};
-  if (ev?.kind === "exit") return `Worker 退出（code ${d.code ?? "?"}）${d.error ? " · " + d.error : ""}`;
-  if (ev?.kind === "spawn") return "拉起 worker";
-  if (ev?.kind === "gate") return String(d.question ?? "等你处理").slice(0, 80);
-  const s = d.text ?? d.cmd ?? d.question ?? d.summary ?? d.args ?? d.tool ?? ev?.kind ?? "";
-  return String(s).replace(/\s+/g, " ").trim().slice(0, 80);
-}
-
-/** run 级最近事件 + 全部节点最晚 finished_at（rail 预览/耗时用） */
-function runPulse(rootId: string, paths: string[]): { last: any | null; ended_at: string | null } {
-  let best: any = null, ended: string | null = null;
-  for (const p of paths) {
-    const dir = join(RUNS, rootId, "nodes", ...p.split("/"));
-    const ev = tailEvent(join(dir, "events.jsonl"));
-    if (ev && (!best || ev.ts > best.ts)) best = ev;
-    const r = readJson<any>(join(dir, "result.json"));
-    if (r?.finished_at && (!ended || r.finished_at > ended)) ended = r.finished_at;
-  }
-  return { last: best ? { kind: best.kind, ts: best.ts, hint: evHint(best), tool: best.data?.tool ?? null } : null, ended_at: ended };
-}
-
+// 路径安全：拒绝 .. 与绝对路径注入；返回 RUNS 内 resolved 路径或 null（实现见 view.ts）
+function safeJoin(...parts: string[]): string | null { return safeJoinIn(RUNS, ...parts); }
 // ---- API handlers ----
 function apiRuns(res: any): void {
   if (!existsSync(RUNS)) return json(res, 200, { runs: [] });
@@ -120,11 +42,11 @@ function apiRuns(res: any): void {
     .filter(d => d.isDirectory() && okId(d.name))
     .map(d => {
       const meta = readJson<any>(join(RUNS!, d.name, "run.json"));
-      const paths = nodePaths(d.name);
+      const paths = nodePaths(RUNS, d.name);
       const counts: Record<string, number> = {};
-      for (const p of paths) counts[nodeStatus(d.name, p).status] = (counts[nodeStatus(d.name, p).status] ?? 0) + 1;
+      for (const p of paths) counts[nodeStatus(RUNS, d.name, p).status] = (counts[nodeStatus(RUNS, d.name, p).status] ?? 0) + 1;
       const rollup = counts.failed ? "failed" : counts.blocked ? "blocked" : (counts.running || counts.empty || !paths.length) ? "running" : "done";
-      const pulse = runPulse(d.name, paths);
+      const pulse = runPulse(RUNS, d.name, paths);
       return { root_id: d.name, created_at: meta?.created_at ?? null, kind: meta?.kind ?? null,
                subject: meta?.subject ?? null, plan_version: meta?.plan_version ?? null,
                nodes: paths.length, counts, status: rollup,
@@ -137,11 +59,11 @@ function apiRuns(res: any): void {
 function apiTree(res: any, rootId: string): void {
   if (!safeJoin(rootId) || !existsSync(join(RUNS, rootId))) return err(res, 404, "run not found");
   const meta = readJson<any>(join(RUNS, rootId, "run.json"));
-  const nodes = nodePaths(rootId).map(path => {
+  const nodes = nodePaths(RUNS, rootId).map(path => {
     const dir = safeJoin(rootId, "nodes", ...path.split("/"))!;
     const spec = readJson<any>(join(dir, "spec.json"));
     const r = readJson<any>(join(dir, "result.json"));
-    const st = nodeStatus(rootId, path);
+    const st = nodeStatus(RUNS, rootId, path);
     // spec.parent 形如 node:<root>/<path> → 取末段做父路径
     const parent = typeof spec?.parent === "string" && spec.parent.includes("/") ? spec.parent.split("/").pop() : (spec?.parent ?? null);
     const usage = readJson<any>(join(dir, "usage.json"));
@@ -162,7 +84,7 @@ function apiNode(res: any, rootId: string, path: string): void {
         .map(d => ({ name: d.name, size: statSync(join(artDir, d.name)).size }))
     : [];
   const evFile = join(dir, "events.jsonl");
-  const st = nodeStatus(rootId, path);
+  const st = nodeStatus(RUNS, rootId, path);
   const spec = readJson<any>(join(dir, "spec.json"));
   json(res, 200, {
     path, status: st.status, spec, result: readJson(join(dir, "result.json")),
@@ -202,145 +124,10 @@ function apiArtifact(res: any, rootId: string, path: string, name: string): void
 }
 
 // ---- /api/v1/view：workbench 视图投影（run 卡片 + 树 + 收件箱 inbox + 已完结 settled）----
-const pad2 = (n: number) => String(n).padStart(2, "0");
-function mmss(ms: number): string {           // "mm:ss"（分钟可超 59，与原型一致）
-  const s = Math.max(0, Math.round(ms / 1000));
-  return `${pad2(Math.floor(s / 60))}:${pad2(s % 60)}`;
-}
-function hhmm(iso: string): string {          // settled 时间戳 "HH:MM"（本地时区）
-  const d = new Date(iso);
-  return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
-}
-function nodeName(rootId: string, path: string): string {   // nm：spec.goal 首行截 20 字，兜底 path 末段
-  const spec = readJson<any>(join(RUNS, rootId, "nodes", ...path.split("/"), "spec.json"));
-  const first = String(spec?.goal ?? "").split("\n")[0].trim();
-  return (first || path.split("/").pop() || path).slice(0, 20);
-}
-function depDone(rootId: string, dep: string): boolean {    // depends 写兄弟 path 或完整 node:<root>/<path>
-  const p = dep.startsWith(`node:${rootId}/`) ? dep.slice(`node:${rootId}/`.length) : dep;
-  return readJson<any>(join(RUNS, rootId, "nodes", ...p.split("/"), "result.json"))?.status === "done";
-}
-// tree 的 st 映射：waiting→input（wait_on 挂起=等子节点，归 dep 不进 inbox）/ 无 result 且 dep 未满足→dep / 无 result（未拉起或跑着）→queued / blocked→dep
-function viewStatus(rootId: string, spec: any, r: any): string {
-  if (r) {
-    if (r.status === "waiting" && Array.isArray(r.wait_on) && r.wait_on.length) return "dep";   // S7 ev_wait join：自动复活，不占人工位
-    return ({ waiting: "input", done: "done", failed: "failed", blocked: "dep" } as Record<string, string>)[r.status] ?? "done";
-  }
-  if (spec?.depends?.length && spec.depends.some((d: string) => !depDone(rootId, d))) return "dep";
-  return "queued";
-}
-
+// S16：投影本体在 view.ts::buildView（纯函数，runsDir 由参数传入，时间可注入）——
+// 本函数只剩 HTTP 胶水，改投影只动 view.ts，不动路由。
 function apiView(res: any): void {
-  const runs: any[] = [], inbox: any[] = [], settled: any[] = [];
-  if (!existsSync(RUNS)) return json(res, 200, { runs, inbox, settled });
-  const rootIds = readdirSync(RUNS, { withFileTypes: true })
-    .filter(d => d.isDirectory() && okId(d.name)).map(d => d.name)
-    .sort((a, b) => String(readJson<any>(join(RUNS, b, "run.json"))?.created_at ?? "")
-      .localeCompare(String(readJson<any>(join(RUNS, a, "run.json"))?.created_at ?? ""))); // 新 run 在前（同 /api/runs）
-  for (const rootId of rootIds) {
-    const meta = readJson<any>(join(RUNS, rootId, "run.json"));
-    // 节点级投影：spec + result + 尾事件 + gate
-    const nodes = nodePaths(rootId).map(path => {
-      const dir = join(RUNS, rootId, "nodes", ...path.split("/"));
-      const spec = readJson<any>(join(dir, "spec.json"));
-      const r = readJson<any>(join(dir, "result.json"));
-      const ev = tailEvent(join(dir, "events.jsonl"));
-      const specFile = join(dir, "spec.json");
-      const created = existsSync(specFile) ? statSync(specFile).mtimeMs : Date.now(); // 无 spec.created_at，用文件 mtime
-      // steps：events.jsonl 尾部事件 → sheet「执行过程」行 {t,a,r,st}
-      const evLines = existsSync(join(dir, "events.jsonl"))
-        ? readFileSync(join(dir, "events.jsonl"), "utf8").split("\n").filter(l => l.trim()).slice(-12) : [];
-      const steps = evLines.map(l => {
-        try {
-          const e = JSON.parse(l), kind = e.kind ?? "";
-          const st = kind === "exit" ? (e.data?.error || (e.data?.code ?? 0) !== 0 ? "err" : "ok")
-                   : kind === "gate" ? "wait" : kind === "spawn" ? "run" : "ok";
-          return { t: String(e.ts ?? "").slice(11, 19), a: String(kind), r: evHint(e).slice(0, 60), st };
-        } catch { return null; }
-      }).filter(Boolean);
-      const ad = join(dir, "artifacts");
-      const out = existsSync(ad) ? readdirSync(ad, { withFileTypes: true }).filter(f => f.isFile()).map(f => f.name) : [];
-      const gate = readJson<any>(join(dir, "gate.json"));
-      const usage = readJson<any>(join(dir, "usage.json"));
-      const todo = readJson<any>(join(dir, "todo.json"));
-      return {
-        path, spec, r, gate,
-        st: viewStatus(rootId, spec, r),
-        // S10 控制面投影：live=worker.json 租约在、cur=尾事件工具/动作、spent=token 累计、wait=waiting 原因
-        live: existsSync(join(dir, "worker.json")),
-        cur: ev?.data?.tool ?? ev?.kind ?? null,
-        spent: usage?.tokens ?? r?.spent?.tokens ?? null,
-        todo: Array.isArray(todo?.items) ? todo.items : null,   // S9 ev_todo 清单投影
-        wait: r?.status === "waiting" ? (gate?.question ?? (Array.isArray(r?.wait_on) ? `等子节点 ${r.wait_on.join(", ")}` : r?.wait_on) ?? null) : null,
-        nm: nodeName(rootId, path),
-        d: String(r?.summary ?? (ev ? evHint(ev) : "")).split("\n")[0].slice(0, 80),  // 一句话：result.summary 优先，否则尾事件 hint
-        sum: r?.summary ?? "",                                                     // sheet 小结
-        steps, out,
-        el: mmss((r?.finished_at ? Date.parse(r.finished_at) : Date.now()) - created),
-      };
-    });
-    const waiting = nodes.filter(n => n.st === "input");
-    const allDone = nodes.length > 0 && nodes.every(n => n.r?.status === "done");
-    const ended = nodes.map(n => n.r?.finished_at).filter(Boolean).sort().pop() as string | undefined;
-    // run 不自动隐藏：done/failed 也留在 runs 里可打开，只有显式 DELETE 才消失
-    const status = allDone ? "done" : waiting.length ? "input"
-                 : nodes.some(n => n.r?.status === "failed") ? "failed" : "working";
-    if (allDone) settled.push([meta?.subject ?? rootId, hhmm(ended ?? meta?.created_at ?? new Date().toISOString()), rootId]);
-    const rootNode = nodes.find(n => n.path === "root") ?? nodes[0];
-    // chips：根 spec.accept → [状态,条文]。简化判定：spec.accept_idx===i 的节点 result 存在即 verified、failed 即 failed、无则 pending
-    const chips = (rootNode?.spec?.accept ?? []).map((a: string, i: number) => {
-      const acx = nodes.find(n => n.spec?.accept_idx === i);
-      return [!acx?.r ? "pending" : acx.r.status === "failed" ? "failed" : "verified", a];
-    });
-    const tree = nodes.filter(n => n.path.split("/").length >= 2)   // l=path 段数；root(l=1) 不进树，子节点 l=2 起
-      .map(n => ({ l: n.path.split("/").length, acl: n.spec?.accept_idx ?? 0, st: n.st, nm: n.nm, d: n.d, el: n.el,
-                   path: n.path, sum: n.sum, steps: n.steps, out: n.out,   // sheet 用：定位/小结/执行过程/产物
-                   live: n.live, cur: n.cur, spent: n.spent, wait: n.wait, todo: n.todo, // S10：live ✕ / Σtok / 回复框；S9：清单
-                   wb: n.st === "input" ? "person:answer" : n.st === "dep" ? "dependency" : "" })); // wb=等待对象：等人答/等依赖
-    // arts：全部节点 artifacts/ 汇总到 run 级；非 root 节点的 fn 带 path 前缀防重名
-    const arts: any[] = [];
-    for (const n of nodes) {
-      const ad = join(RUNS, rootId, "nodes", ...n.path.split("/"), "artifacts");
-      if (!existsSync(ad)) continue;
-      for (const f of readdirSync(ad, { withFileTypes: true })) {
-        if (!f.isFile()) continue;
-        const fp = join(ad, f.name);
-        const sz = statSync(fp).size;
-        arts.push({ fn: n.path === "root" ? f.name : `${n.path}/${f.name}`,
-                    sz: sz >= 1024 ? `${(sz / 1024).toFixed(1).replace(/\.0$/, "")} KB` : `${sz} B`,
-                    body: readFileSync(fp).subarray(0, 64 * 1024).toString("utf8") });
-      }
-    }
-    const runIdx = runs.length;
-    const last = runPulse(rootId, nodes.map(n => n.path)).last;
-    // S6：run 行 Σtok = 各节点 spent（result.spent 或 usage.json）累加
-    const spentTotal = nodes.reduce((s, n) => s + (typeof n.spent === "number" ? n.spent : 0), 0);
-    runs.push({
-      id: rootId, title: meta?.subject ?? rootId, status,
-      dur: mmss((ended ? Date.parse(ended) : Date.now()) - Date.parse(meta?.created_at ?? new Date().toISOString())),
-      spent: spentTotal || null,
-      snippet: last?.hint ?? "",
-      req: meta?.subject ?? "",                                          // 原始诉求
-      obj: String(rootNode?.spec?.goal ?? "").split("\n")[0].slice(0, 80), // 目标（根 goal 首行）
-      sum: rootNode?.r?.summary ?? "",                                   // 摘要（根 result）
-      chips, tree, arts,
-    });
-    // inbox：waiting 节点 → 人工闸门条目（gate.run 指回 runs 数组下标）
-    for (const n of waiting) {
-      const q = String(n.gate?.question ?? n.r?.summary ?? "");
-      const opts = n.gate?.opts?.length
-        ? n.gate.opts.map((o: string) => [o, "", `已选择·${o}`])          // [文案, 图标位, 已选后文案]
-        : [["同意", "", "已同意"], ["拒绝", "", "已拒绝"]];
-      const segs = n.path.split("/");
-      const crumb = [meta?.subject ?? rootId, ...segs.map((_, i) => nodeName(rootId, segs.slice(0, i + 1).join("/")))];
-      inbox.push({
-        id: n.spec?.id ?? `node:${rootId}/${n.path}`,
-        t: q.split("\n")[0].slice(0, 80), d: q, crumb, opts,
-        gate: { run: runIdx, nm: n.nm, pd: `回复已送达，${n.nm} 恢复执行`, sn: "已回复 · 节点恢复运行" },
-      });
-    }
-  }
-  json(res, 200, { runs, inbox, settled });
+  json(res, 200, buildView(RUNS));
 }
 
 // ---- ar CLI 桥：dispatch / reply / daemon ----
@@ -386,7 +173,7 @@ function apiDeleteRun(res: any, rootId: string): void {
   const dir = safeJoin(rootId);
   if (!dir || !existsSync(dir)) return err(res, 404, "run not found");
   // 先 abort live worker：删目录后孤儿进程仍在写盘/占 session
-  for (const p of nodePaths(rootId)) {
+  for (const p of nodePaths(RUNS, rootId)) {
     if (existsSync(join(dir, "nodes", ...p.split("/"), "worker.json"))) {
       try {
         execFileSync(process.execPath, [AR_CLI, "abort", "--run", rootId, "--node", p],

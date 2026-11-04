@@ -1,0 +1,7 @@
+{
+  "id": "node:372ce026-be1f/root",
+  "finished_at": "2026-11-03T20:55:29.027Z",
+  "status": "done",
+  "summary": "agent_desktop list-apps 返回 4 个运行中应用（Weixin.exe、WindowsTerminal.exe、ego.exe、msedge.exe），原始输出见 artifacts/ad-fa7cd7db.txt",
+  "type": "result"
+}

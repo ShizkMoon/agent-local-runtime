@@ -1,0 +1,24 @@
+{
+  "id": "node:wb-fixture-demo1/root/fetch",
+  "parent": "node:wb-fixture-demo1/root",
+  "type": "assign",
+  "agent": "pi",
+  "goal": "读取 runtime 源文件并整理接口清单",
+  "inputs": [
+    {
+      "ref": "C:/Repos/agent-local-runtime/src/envelope.ts",
+      "trust": "system"
+    }
+  ],
+  "accept": [
+    "输出接口清单 markdown"
+  ],
+  "tools": [
+    "read",
+    "grep",
+    "ls"
+  ],
+  "budget": {
+    "tokens": 20000
+  }
+}

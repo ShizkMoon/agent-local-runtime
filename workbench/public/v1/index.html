@@ -361,6 +361,38 @@ button.stp-h:hover{background:var(--hov)}
 .stp-out{display:none;margin:0 4px 10px 26px}
 .stp.open .stp-out{display:block}
 
+/* ---------- S17 工具时间线：单行摘要（图标 · 工具名 · 参数首行 · 状态点 · 耗时）+ 展开原文 ---------- */
+.stp-line{flex:1;min-width:0;display:flex;align-items:center;gap:8px;white-space:nowrap;overflow:hidden}
+.stp-t .stp-h{align-items:center}
+.stp-ic{flex:none;display:flex;align-items:center;justify-content:center;width:14px;height:20px;color:var(--t3)}
+.stp-ic svg{width:12px;height:12px;display:block}
+.stp-name{flex:none;font-family:var(--f-mono);font-size:12.5px;line-height:20px;color:var(--t1);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:46%}
+.stp-args{flex:1;min-width:0;font-family:var(--f-mono);font-size:12px;line-height:20px;color:var(--t3);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.stp-exit{flex:none;font-family:var(--f-mono);font-size:11.5px;line-height:18px;color:var(--t3);
+  border:1px solid var(--ln);border-radius:4px;padding:0 5px}
+.stp[data-s="lost"] .sg{color:var(--warn)}
+.stp-out .sh-log{max-height:min(320px,42vh);overflow:auto;margin:0}
+.stp-foot{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:6px;font-size:12px;line-height:1.6;color:var(--t3)}
+.stp-foot .flag{color:var(--warn)}
+.stp-ref{flex:none;height:20px;padding:0 6px;border:1px solid var(--ln);border-radius:4px;
+  font-family:var(--f-mono);font-size:12px;line-height:18px;color:var(--accent);transition:background var(--t-ui) var(--e)}
+.stp-ref:hover{background:var(--hov);border-color:var(--ln-hi)}
+/* 时间线块：与 sheet 的「执行过程」同一套 .steps 行，只在外面加一层标题 */
+.tlx{margin-top:2px}
+.tlx-h{display:flex;align-items:baseline;gap:8px;padding:2px 2px 6px;font-size:12px;color:var(--t3)}
+.tlx-h b{font-weight:var(--w-md);color:var(--t2)}
+.tlx-h .hint{margin-left:auto}
+/* turn 结局闭集：完成/失败/中止/截断/中断，各自一行，颜色只借现有语义色 */
+.turn{display:flex;align-items:baseline;gap:8px;font-size:12.5px;line-height:1.6;color:var(--t3);margin-top:4px}
+.turn .tk{flex:none;font-weight:var(--w-md);color:var(--t2)}
+.turn .tr{flex:1;min-width:0}
+.turn[data-s="completed"] .tk{color:var(--ok)}
+.turn[data-s="failed"] .tk,.turn[data-s="cancelled"] .tk{color:var(--fig)}
+.turn[data-s="max-tokens"] .tk,.turn[data-s="interrupted"] .tk{color:var(--warn)}
+
+
 /* ev_todo 清单 —— sheet 里的 checklist，done 划线 */
 .todo{list-style:none;border-top:1px solid var(--ln)}
 .todo li{display:flex;align-items:baseline;gap:8px;padding:6px 2px;border-bottom:1px solid var(--ln);font-size:13px;color:var(--t2)}
@@ -608,6 +640,7 @@ var currentRun = 0;
 var pendingSelectId = null;   /* 新派发的 run id：下次 view 拉取后选中它 */
 var sheetTimer = 0;
 var subsNd = null;   /* 子代理页签当前下钻到的节点（按 nm 在刷新后重定位） */
+var openSteps = {};  /* S17 工具行展开态：runId|事件行号 → 1（静默刷新后不塌） */
 
 /* ---------- 拉取：首拉一次 + SSE change 300ms 防抖 + 断开回退 5s 轮询 ---------- */
 var fetchTimer = null, pollTimer = null, es = null;
@@ -652,8 +685,7 @@ function notifyNewInbox(){
   if(!fresh.length) return;
   try{
     if(!("Notification" in window)) return;
-    if(Notification.permission === "default"){ Notification.requestPermission(); return; } /* 批下来后下轮再弹 */
-    if(Notification.permission !== "granted") return;
+    if(Notification.permission !== "granted") return;   /* 权限只在首次派发时申请，后台轮询不弹窗 */
     fresh.forEach(function(c){
       var body = String(c.t || c.d || "").split("\n")[0].slice(0, 120);
       try{ new Notification("aica", { body: body }); }catch(e){}
@@ -759,8 +791,10 @@ function openSettled(s){
     openSheetFor({
       nm:s[0], st:"done",
       sum:"已完成 · "+(s[1]||""),
-      steps:nodes.map(function(n){
-        return {t:(n.finished_at||"").slice(11,19), a:n.nm||n.path, r:n.summary||n.status, st:n.status==="done"?"ok":"err"};
+      steps:nodes.map(function(n,i){
+        return { kind:"node", name:n.nm||n.path, args:String(n.summary||n.status||""),
+                 st:n.status==="done"?"ok":"err", exit:null, ms:null, out:[], total:0, truncated:false,
+                 capped:false, ref:null, ts:n.finished_at||"", i:i, call_id:null };
       })
     });
   }).catch(function(){});
@@ -824,7 +858,6 @@ function renderRun(silent){
 
   var h = "";
   if(r.req) h += '<div class="urow"><div class="ububble">'+esc(r.req)+'</div></div>';
-  if(r.sum) h += '<div class="atext">'+esc(r.sum)+'</div>';
 
   /* 根卡 = 目标 + 验收清单；每个验收条目下挂着为它派出的子代理 */
   h += '<div class="root-card">'+
@@ -841,12 +874,19 @@ function renderRun(silent){
   }
   h += '</div>';
 
-  /* thinking 指示：working = 3 clay dots 动画；input = 静置等待行 */
+  /* S17 顺序：用户 → 计划（根卡）→ 工具时间线 → 结论。原始事件不铺开（反模式 A-1）。 */
+  h += timelineHtml(r);
+  if(r.sum) h += '<div class="atext">'+esc(r.sum)+'</div>';   /* 结论 */
+
+  /* 状态行：进行中=最新一步在做什么（A8 心跳）；已结束=turn 结局闭集 + reason */
   if(r.status==="working"){
-    h += '<div class="think"><span class="td"><i></i><i></i><i></i></span><span class="tk">思考中 · 正在归纳子节点结论…</span></div>';
+    var curStep = (r.steps||[]).filter(function(s){ return s.st==="run"; }).pop() || (r.steps||[]).slice(-1)[0];
+    var doing = curStep ? String(curStep.name+" "+(curStep.args||"")).slice(0,60) : "正在归纳子节点结论…";
+    h += '<div class="think"><span class="td"><i></i><i></i><i></i></span><span class="tk">进行中 · '+esc(doing)+'</span></div>';
   }else{
-    h += '<div class="think"><span class="td still"><i></i><i></i><i></i></span><span class="tk">'+
-      (r.status==="done" ? "已完成" : r.status==="failed" ? "已失败" : "已暂停 · 等你裁决后继续")+'</span></div>';
+    h += turnHtml(r.turn, r.sum) ||
+      '<div class="think"><span class="td still"><i></i><i></i><i></i></span><span class="tk">'+
+        (r.status==="done" ? "已完成" : r.status==="failed" ? "已失败" : "已暂停 · 等你裁决后继续")+'</span></div>';
   }
 
   var ts = $("#threadScroll");
@@ -882,6 +922,21 @@ function renderRun(silent){
       el.disabled = true;
       nodePost(n,"abort").then(scheduleFetch).catch(function(){ el.disabled = false; });
     });
+  });
+  bindStepRows("#threadScroll", r.id, "root");
+}
+/* S17 工具行：点一行展开/折叠原文；展开态按 scope|行号 记住（SSE 静默刷新后不塌） */
+function bindStepRows(scopeSel, scope, nodePath){
+  each(scopeSel+" .stp-h",function(el){
+    el.addEventListener("click",function(){
+      var li = el.parentElement;
+      var on = li.classList.toggle("open");
+      el.setAttribute("aria-expanded", on ? "true" : "false");
+      openSteps[stepKey(scope, li.dataset.i)] = on ? 1 : 0;
+    });
+  });
+  each(scopeSel+" .stp-ref",function(el){
+    el.addEventListener("click",function(e){ e.stopPropagation(); openRef(el.dataset.ref, nodePath); });
   });
 }
 function selectRun(i){
@@ -925,15 +980,78 @@ function nodePathOf(n){
   return n.path || n.p || n.np || n.nm || null;
 }
 function encPath(p){ return String(p).split("/").map(encodeURIComponent).join("/"); }
-function stepHtml(s){
-  var g = s.st==="ok" ? "✓" : s.st==="err" ? "×" : "<i></i>";
-  var row = '<span class="sg">'+g+'</span>'+
-    '<span class="sa"><b>'+esc(s.a)+'</b>'+(s.r?'<span>'+esc(s.r)+'</span>':"")+'</span>'+
-    '<span class="tm num">'+esc(s.t)+'</span>';
-  return '<li class="stp" data-s="'+esc(s.st)+'">'+(s.out
-    ? '<button class="stp-h">'+row+CHEV+'</button><pre class="sh-log stp-out">'+esc(s.out)+'</pre>'
-    : '<div class="stp-h">'+row+'<span class="chev"></span></div>')+'</li>';
+/* ================= S17 工具时间线：单行摘要 + 展开原文 =================
+   数据契约见 workbench/view.ts StepView：{kind,name,args,st,exit,ms,out[],total,truncated,capped,ref,ts,i}
+   诚实性：out 只给前 40 行，truncated/total 必须显示；capped=源事件本身是 300 字预览，要说清楚。 */
+function stepKey(scope, i){ return String(scope)+"|"+i; }
+function stepMs(ms){
+  if(ms==null||ms===""||isNaN(ms)) return "";
+  return ms>=1000 ? (ms/1000).toFixed(1).replace(/\.0$/,"")+"s" : Math.round(ms)+"ms";
 }
+function stepFootHtml(s){
+  var out = Array.isArray(s.out) ? s.out : [];
+  var foot = "";
+  var rest = (s.total||0) - out.length;
+  if(s.truncated && rest>0) foot += '<span>还有 '+rest+' 行 · 事件里共 '+(s.total||0)+' 行</span>';
+  if(s.capped) foot += '<span class="flag">事件里的输出只是源侧 300 字预览</span>';
+  var ref = s.ref ? String(s.ref).replace(/^artifacts\//,"") : "";
+  if(ref) foot += '<button class="stp-ref" data-ref="'+esc(ref)+'">完整输出 → '+esc(ref)+'</button>';
+  return foot ? '<div class="stp-foot">'+foot+'</div>' : "";
+}
+/* 图标只在工具行上用：内联 SVG（不依赖字体字形），与现有 chevron/图标的描边风格一致 */
+var STEP_IC = {
+  tool:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m7 8 4 4-4 4M13 16h4"/></svg>',
+  edit:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h4L20 8l-4-4L4 16v4Z"/></svg>',
+  node:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3.5"/></svg>'
+};
+function stepHtml(s, scope){
+  s = s || {};
+  var st = s.st || "ok";
+  var g = st==="ok" ? "✓" : st==="err" ? "×" : st==="lost" ? "!" : "<i></i>";
+  var out = Array.isArray(s.out) ? s.out : [];
+  var open = !!openSteps[stepKey(scope, s.i)];
+  var ex = (typeof s.exit==="number") ? '<span class="stp-exit">exit '+esc(s.exit)+'</span>' : "";
+  var ms = stepMs(s.ms);
+  return '<li class="stp stp-t'+(open?" open":"")+'" data-s="'+esc(st)+'" data-i="'+esc(s.i)+'">'+
+    '<button class="stp-h" aria-expanded="'+(open?"true":"false")+'" title="'+esc(s.args||"")+'">'+
+      '<span class="sg">'+g+'</span>'+
+      '<span class="stp-line">'+
+        '<span class="stp-ic" aria-hidden="true">'+(STEP_IC[s.kind]||STEP_IC.tool)+'</span>'+
+        '<span class="stp-name">'+esc(s.name||"tool")+'</span>'+
+        (s.args?'<span class="stp-args">'+esc(s.args)+'</span>':"")+
+      '</span>'+ ex + (ms?'<span class="tm num">'+esc(ms)+'</span>':"") + CHEV+
+    '</button>'+
+    '<div class="stp-out"><pre class="sh-log">'+esc(out.length ? out.join("\n") : "（无输出）")+'</pre>'+stepFootHtml(s)+'</div></li>';
+}
+/* run 详情的工具区：只在有 step 时出现（没有工具调用就不占位） */
+function timelineHtml(r){
+  var steps = Array.isArray(r.steps) ? r.steps : [];
+  if(!steps.length) return "";
+  var bad = steps.filter(function(s){ return s.st==="err"||s.st==="lost"; }).length;
+  return '<div class="tlx"><div class="tlx-h"><b>工具</b><span>'+steps.length+' 步'+
+      (bad?' · <span style="color:var(--fig)">'+bad+' 步异常</span>':'')+'</span>'+
+      '<span class="hint">点一行展开原文</span></div>'+
+      '<ol class="steps">'+steps.map(function(s){ return stepHtml(s, r.id); }).join("")+'</ol></div>';
+}
+var TURN_LABEL = {completed:"已完成","max-tokens":"被 token 上限截断",interrupted:"中断",cancelled:"已中止",failed:"失败",running:"进行中"};
+/* turn 结局一行：state 是闭集；reason 只在结论区没有说过时补一句（R1 一条信息只出现一次） */
+function turnHtml(t, said){
+  t = t || {};
+  var st = t.state || "running";
+  if(st==="running") return "";
+  var r = t.reason ? String(t.reason) : "";
+  var dup = r && said && String(said).indexOf(r.slice(0, 24)) >= 0;   /* 与结论同一句话就不重复 */
+  return '<div class="turn" data-s="'+esc(st)+'"><span class="tk">'+esc(TURN_LABEL[st]||st)+'</span>'+
+    (r && !dup ? '<span class="tr">'+esc(r)+'</span>' : "")+'</div>';
+}
+/* 溢写引用 → 打开产物（与右栏产物同一个 sheet）；ring 内没有就退回 artifact 接口 */
+function openRef(name, nodePath){
+  var fn = String(name||"").replace(/^artifacts\//,"");
+  var a = artOf(fn) || artOf("root/"+fn) || artOf((nodePath||"root")+"/"+fn);
+  if(a){ openSheetFor(a); return; }
+  openSheetFor({fn:fn, sz:"", path:nodePath||"root"});
+}
+
 /* 产物真实文本：GET /api/runs/<run>/node/<nodePath>/artifact/<name> → 填进 .sh-log */
 function loadArtifact(a, node){
   var el = $("#shArt");
@@ -982,6 +1100,8 @@ function loadTranscript(n){
 }
 function openSheetFor(n, from){
   var isArt = !!(n.fn && !n.nm), body;
+  var sheetNp = isArt ? null : nodePathOf(n);
+  var stepScope = (((RUNS[currentRun]||{}).id)||"")+"/"+(sheetNp||"");
   var meta = isArt ? esc(n.sz||"")
     : '<span class="dot '+esc(n.st)+'"></span>'+esc([stLabel(n.st), n.el,
         n.wait ? "等："+String(n.wait).slice(0,40) : n.wb&&WB_LABEL[n.wb] ? "等"+WB_LABEL[n.wb] : ""].filter(Boolean).join(" · "));
@@ -994,12 +1114,14 @@ function openSheetFor(n, from){
     if(n.live) body += '<div class="sh-reply"><input id="shRp" placeholder="回复该节点…（进 spec.reply，下轮可见）" enterkeyhint="send">'+
       '<button class="opt solid" id="shRpGo">发送</button></div>';    /* live 节点：直达 reply 通道 */
     body += '<p class="sh-sum">'+esc(nodeSum(n))+'</p>';
+    /* S17：只有非正常结局才补一行原因（meta 已写状态，正常完成不重复） */
+    if(n.turn && n.turn.state!=="running" && n.turn.state!=="completed") body += turnHtml(n.turn, nodeSum(n));
     /* S9 ev_todo 清单：done 划线，全量覆盖投影 */
     if(Array.isArray(n.todo) && n.todo.length) body += '<div class="sh-sec">清单</div><ol class="todo">'+n.todo.map(function(it){
       var dn = !!(it && it.done);
       return '<li'+(dn?' class="done"':'')+'><span class="ck">'+(dn?'✓':'○')+'</span><span class="tt">'+esc(it&&it.text||"")+'</span></li>';
     }).join("")+'</ol>';
-    if(Array.isArray(n.steps) && n.steps.length) body += '<div class="sh-sec">执行过程</div><ol class="steps">'+n.steps.map(stepHtml).join("")+'</ol>';
+    if(Array.isArray(n.steps) && n.steps.length) body += '<div class="sh-sec">执行过程</div><ol class="steps">'+n.steps.map(function(s){ return stepHtml(s, stepScope); }).join("")+'</ol>';
     if(Array.isArray(n.out) && n.out.length) body += '<div class="sh-sec">产出</div>'+n.out.map(function(fn){
       return '<button class="artl" data-fn="'+esc(fn)+'"><span class="fn">'+esc(fn)+'</span><span class="sz">'+esc((artOf(fn)||{}).sz||"")+'</span></button>';
     }).join("");
@@ -1020,9 +1142,7 @@ function openSheetFor(n, from){
   void $("#sheet").offsetWidth;   /* reflow：让进场过渡从 translateX/opacity 起点播起 */
   $("#sheet").classList.add("open");
   $("#shX").addEventListener("click",closeSheet);
-  each("#sheet button.stp-h",function(el){
-    el.addEventListener("click",function(){ el.parentElement.classList.toggle("open"); });
-  });
+  bindStepRows("#sheet", stepScope, sheetNp);
   each("#sheet .artl[data-fn]",function(el){
     el.addEventListener("click",function(){
       /* out 文件名 → 真实 artifact；run 级 arts 里有同名条目则带上其 sz/body */
@@ -1292,6 +1412,7 @@ $("#sendBtn").addEventListener("click",function(){
   cText.value = "";
   cText.style.height = "";
   $("#threadScroll").scrollTop = $("#threadScroll").scrollHeight;
+  notifyAskPermission();   /* 首次派发=明确手势，此时申请一次系统通知权限 */
   fetch("/api/tasks", {method:"POST", headers:{"content-type":"application/json"},
     body:JSON.stringify({
       goal:v,
@@ -1323,7 +1444,8 @@ renderRun(true);
 renderArts();
 renderSubs(null);
 renderDset();
-notifyAskPermission();   /* S13：加载时申请通知权限（default→ask；已授予/已拒不再问） */
+/* 通知权限不在加载时申请：等用户第一次真的派发任务再问（见 composer），
+   否则 WebView2 一开窗就弹权限框，像 bug 一样打断人。 */
 fetchView();
 connectSSE();
 </script>

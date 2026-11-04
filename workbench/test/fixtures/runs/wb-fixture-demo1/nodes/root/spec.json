@@ -1,0 +1,21 @@
+{
+  "id": "node:wb-fixture-demo1/root",
+  "type": "assign",
+  "agent": "pi",
+  "profile": "orchestrator",
+  "goal": "收集 aica runtime 文档并给出执行摘要",
+  "inputs": [],
+  "accept": [
+    "两个子节点均产出摘要"
+  ],
+  "budget": {
+    "depth_left": 2,
+    "minutes": 10
+  },
+  "mode": {
+    "shape": "diverge",
+    "axis": "topic",
+    "n": 2,
+    "why": "拆分收集与汇总"
+  }
+}

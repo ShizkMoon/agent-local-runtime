@@ -1,0 +1,15 @@
+{
+  "type": "assign",
+  "agent": "pi",
+  "goal": "Call the agent_desktop tool exactly once with argv [\"list-apps\"]. The tool output is a JSON object with data.apps (a list of running apps). Then call ev_done with a one-line summary stating how many apps were listed. Do not call any other tool.",
+  "accept": [
+    "输出一句话执行摘要"
+  ],
+  "budget": {
+    "depth_left": 2
+  },
+  "tools": [
+    "agent_desktop"
+  ],
+  "id": "node:372ce026-be1f/root"
+}

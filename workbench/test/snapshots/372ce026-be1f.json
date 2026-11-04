@@ -1,0 +1,81 @@
+{
+ "runs": [
+  {
+   "id": "372ce026-be1f",
+   "title": "smoke-tools",
+   "status": "done",
+   "dur": "00:05",
+   "spent": null,
+   "snippet": "Worker 退出（code 0）",
+   "req": "smoke-tools",
+   "obj": "Call the agent_desktop tool exactly once with argv [\"list-apps\"]. The tool outpu",
+   "sum": "agent_desktop list-apps 返回 4 个运行中应用（Weixin.exe、WindowsTerminal.exe、ego.exe、msedge.exe），原始输出见 artifacts/ad-fa7cd7db.txt",
+   "chips": [
+    [
+     "pending",
+     "输出一句话执行摘要"
+    ]
+   ],
+   "tree": [],
+   "arts": [
+    {
+     "fn": "ad-fa7cd7db.txt",
+     "sz": "549 B",
+     "body": "{\"version\":\"2.6\",\"ok\":true,\"command\":\"list-apps\",\"data\":{\"apps\":[{\"name\":\"Weixin.exe\",\"pid\":13436,\"presentation\":\"foreground\",\"process_instance\":\"windows-proc-v1:13438165892:1793044\"},{\"name\":\"WindowsTerminal.exe\",\"pid\":15468,\"presentation\":\"foreground\",\"process_instance\":\"windows-proc-v1:13438162024:8371857\"},{\"name\":\"ego.exe\",\"pid\":4960,\"presentation\":\"foreground\",\"process_instance\":\"windows-proc-v1:13438161961:2653338\"},{\"name\":\"msedge.exe\",\"pid\":12600,\"presentation\":\"foreground\",\"process_instance\":\"windows-proc-v1:13438167053:7340668\"}]}}\n"
+    }
+   ],
+   "steps": [
+    {
+     "kind": "tool",
+     "name": "agent_desktop",
+     "args": "{\"argv\":[\"list-apps\"]}",
+     "st": "ok",
+     "exit": null,
+     "ms": 19,
+     "out": [
+      "ref=artifacts/ad-fa7cd7db.txt",
+      "{\"version\":\"2.6\",\"ok\":true,\"command\":\"list-apps\",\"data\":{\"apps\":[{\"name\":\"Weixin.exe\",\"pid\":13436,\"presentation\":\"foreground\",\"process_instance\":\"windows-proc-v1:13438165892:1793044\"},{\"name\":\"WindowsTerminal.exe\",\"pid\":15468,\"presentation\":\"foreground\",\"process_instanc…"
+     ],
+     "total": 2,
+     "truncated": false,
+     "capped": true,
+     "ref": "artifacts/ad-fa7cd7db.txt",
+     "ts": "2026-11-03T20:55:26.412Z",
+     "i": 2,
+     "call_id": "call_bd4f0c421d2043d09ea5b902"
+    },
+    {
+     "kind": "tool",
+     "name": "ev_done",
+     "args": "{\"summary\":\"agent_desktop list-apps 返回 4 个运行中应用（Weixin.exe、WindowsTerminal.exe、ego.exe、msedge.exe），原始输出见 artifacts/ad-fa7cd7db.txt\"}",
+     "st": "ok",
+     "exit": null,
+     "ms": 64,
+     "out": [
+      "{\"version\":\"1.0\",\"ok\":true,\"command\":\"done\",\"data\":{\"id\":\"node:372ce026-be1f/root\",\"finished_at\":\"2026-11-03T20:55:29.027Z\",\"status\":\"done\",\"summary\":\"agent_desktop list-apps 返回 4 个运行中应用（Weixin.exe、WindowsTerminal.exe、ego.exe、msedge.exe），原始输出见 artifacts/ad-fa7cd7db.txt\",\"type\":\"result\"}}"
+     ],
+     "total": 1,
+     "truncated": false,
+     "capped": false,
+     "ref": null,
+     "ts": "2026-11-03T20:55:28.972Z",
+     "i": 5,
+     "call_id": "call_ad213c4979ae4adda7dda8e8"
+    }
+   ],
+   "turn": {
+    "state": "completed",
+    "reason": "agent_desktop list-apps 返回 4 个运行中应用（Weixin.exe、WindowsTerminal.exe、ego.exe、msedge.exe），原始输出见 artifacts/ad-fa7cd7db.txt",
+    "code": 0
+   }
+  }
+ ],
+ "inbox": [],
+ "settled": [
+  [
+   "smoke-tools",
+   "<hh:mm>",
+   "372ce026-be1f"
+  ]
+ ]
+}

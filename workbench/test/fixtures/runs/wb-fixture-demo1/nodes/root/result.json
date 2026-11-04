@@ -1,0 +1,21 @@
+{
+  "id": "node:wb-fixture-demo1/root",
+  "type": "result",
+  "status": "split",
+  "summary": "拆分为 fetch / summarize 两个子节点",
+  "children": [
+    {
+      "kind": "collect",
+      "subject": "fetch"
+    },
+    {
+      "kind": "aggregate",
+      "subject": "summarize"
+    }
+  ],
+  "spent": {
+    "tokens": 1240,
+    "minutes": 1
+  },
+  "finished_at": "2026-11-03T08:10:09.640Z"
+}

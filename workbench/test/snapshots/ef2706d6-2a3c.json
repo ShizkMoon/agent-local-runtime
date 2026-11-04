@@ -1,0 +1,26 @@
+{
+ "runs": [
+  {
+   "id": "ef2706d6-2a3c",
+   "title": "smoke test",
+   "status": "working",
+   "dur": "976:08",
+   "spent": null,
+   "snippet": "",
+   "req": "smoke test",
+   "obj": "",
+   "sum": "",
+   "chips": [],
+   "tree": [],
+   "arts": [],
+   "steps": [],
+   "turn": {
+    "state": "running",
+    "reason": null,
+    "code": null
+   }
+  }
+ ],
+ "inbox": [],
+ "settled": []
+}
