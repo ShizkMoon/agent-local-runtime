@@ -75,8 +75,8 @@ function userMessage(spec: SpecEnvelope, resumed = false): string {
   return lines.join("\n");
 }
 
-/** Worker 拉起命令：按 spec.agent 选 launcher */
-function launcher(spec: SpecEnvelope, resumed = false): { file: string; args: string[]; desc: string } {
+/** Worker 拉起命令：按 spec.agent 选 launcher。dir = 节点目录（session 挂其下，恢复拉起继承上下文） */
+function launcher(spec: SpecEnvelope, resumed = false, dir?: string): { file: string; args: string[]; desc: string } {
   const agent = spec.agent ?? "pi";
   switch (agent) {
     case "pi": {
@@ -85,7 +85,9 @@ function launcher(spec: SpecEnvelope, resumed = false): { file: string; args: st
       const model = spec.model ?? process.env.AICA_PI_MODEL ?? DEFAULT_PI_MODEL;
       const args = [
         cli,
-        "-p", "--mode", "json", "--no-session",
+        "-p", "--mode", "json",
+        // 节点级持久 session：人工回复/多轮重拉都继承完整上下文（不再每次失忆重开）
+        ...(dir ? ["--session-dir", join(dir, "session"), "--session-id", "aica"] : ["--no-session"]),
         // 封闭 worker：只加载显式 -e 扩展，关掉技能/模板/MCP/上下文文件发现
         "--no-extensions", "--no-context-files", "--no-skills", "--no-prompt-templates", "--no-mcp",
         "--model", model,
@@ -126,7 +128,7 @@ function spawnWorker(rootId: string, path: string, spec: SpecEnvelope, resumed =
   running.add(spec.id);
   let file: string, args: string[], desc: string;
   try {
-    ({ file, args, desc } = launcher(spec, resumed));
+    ({ file, args, desc } = launcher(spec, resumed, dir));
   } catch (e) {
     running.delete(spec.id);
     appendEvent(rootId, path, { kind: "exit", data: { code: -1, error: `launcher: ${String(e)}` } });
