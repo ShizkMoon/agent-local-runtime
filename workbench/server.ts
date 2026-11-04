@@ -10,7 +10,8 @@ import { fileURLToPath } from "node:url";
 import { execFile, execFileSync, spawn, type ChildProcess } from "node:child_process";
 // S16：视图投影住在 view.ts（纯函数，runsDir 由参数传入）；本文件只做 HTTP 胶水
 import { buildView, okId, badSeg, readJson, safeJoinIn, nodePaths, nodeStatus, evHint, runPulse, viewCacheStats, clearViewCache, approvalState, proposalDetail, mergeProposal, filterProposals } from "./view.ts";
-import { arEnv, spawnDaemon } from "./spawn.ts";
+import { arEnv, spawnDaemon, repoRoot } from "./spawn.ts";
+import { gitStatus, gitDiff, gitCommit, readAsk, writeAsk, clearAsk, runCwd, type GitAsk } from "./git.ts";
 // S19：审批决策闭集由 gate.ts 持有（唯一真相），桥只做校验与落盘
 import { GATE_DECISIONS } from "../aica-pi/extensions/gate.ts";
 // S21：事件增量读与 fork 复用 runs.ts 的唯一实现（seq 语义只在一处定义）
@@ -401,6 +402,75 @@ async function apiSettingsPost(req: any, res: any): Promise<void> {
   } catch (e) { json(res, 500, { ok: false, error: String(e).slice(0, 300) }); }
 }
 
+// ---------------------------------------------------------------- R5：Git 路由（commit 必须走审批卡）
+
+/** run 的工作目录：run.json.cwd 优先，否则仓库根 */
+function gitCwdFor(runId: string): string {
+  return runCwd(RUNS, runId, repoRoot());
+}
+
+async function apiGitStatus(res: any, runId: string | null): Promise<void> {
+  if (!runId || !okId(runId)) return err(res, 400, "run required");
+  const cwd = gitCwdFor(runId);
+  const st = gitStatus(cwd);
+  json(res, 200, { ok: true, run: runId, cwd, ...st });
+}
+
+async function apiGitDiff(res: any, runId: string | null, path: string | null): Promise<void> {
+  if (!runId || !okId(runId)) return err(res, 400, "run required");
+  if (!path || path.length > 400) return err(res, 400, "path required");
+  const d = gitDiff(gitCwdFor(runId), path);
+  json(res, d.ok ? 200 : 500, { ok: d.ok, run: runId, path, patch: d.patch, error: d.error });
+}
+
+/** 只落 ask 卡，不执行任何 git 操作 */
+async function apiGitCommitAsk(req: any, res: any): Promise<void> {
+  let body: any = {};
+  try { body = JSON.parse((await readBody(req)) || "{}"); } catch { return err(res, 400, "bad json"); }
+  const runId = String(body.run ?? "");
+  if (!okId(runId)) return err(res, 400, "run required");
+  const message = String(body.message ?? "").trim();
+  if (!message) return err(res, 400, "commit message 不能为空");
+  const cwd = gitCwdFor(runId);
+  const st = gitStatus(cwd);
+  if (!st.repo) return err(res, 409, "不是 git 仓库");
+  if (!st.files.length) return err(res, 409, "工作区没有改动");
+  const ask: GitAsk = {
+    id: `git-${Date.now().toString(36)}`, message,
+    files: st.files.map(f => f.path), created_at: new Date().toISOString(),
+  };
+  writeAsk(RUNS, runId, ask);
+  clearViewCache();
+  json(res, 200, { ok: true, pending: true, ask, run: runId, cwd });
+}
+
+/** 批准才真的 `git add -A && git commit` */
+async function apiGitCommitApprove(req: any, res: any): Promise<void> {
+  let body: any = {};
+  try { body = JSON.parse((await readBody(req)) || "{}"); } catch { return err(res, 400, "bad json"); }
+  const runId = String(body.run ?? "");
+  if (!okId(runId)) return err(res, 400, "run required");
+  const ask = readAsk(RUNS, runId);
+  if (!ask) return json(res, 404, { ok: false, error: "没有待审批的提交" });
+  const out = gitCommit(gitCwdFor(runId), ask.message);
+  if (!out.ok) return json(res, 500, { ok: false, error: out.error });
+  clearAsk(RUNS, runId);
+  clearViewCache();
+  json(res, 200, { ok: true, commit: out.sha ?? null, run: runId });
+}
+
+/** 拒绝：只删 ask，一条 git 命令都不跑 */
+async function apiGitCommitReject(req: any, res: any): Promise<void> {
+  let body: any = {};
+  try { body = JSON.parse((await readBody(req)) || "{}"); } catch { return err(res, 400, "bad json"); }
+  const runId = String(body.run ?? "");
+  if (!okId(runId)) return err(res, 400, "run required");
+  const had = !!readAsk(RUNS, runId);
+  clearAsk(RUNS, runId);
+  clearViewCache();
+  json(res, 200, { ok: true, rejected: true, had, run: runId });
+}
+
 /** GET /api/proposals/:slug → 列表项 + proposal.md / change.patch / verify.json 正文（R3 提案页签） */
 async function apiProposalDetail(res: any, slug: string): Promise<void> {
   const mod = await proposalsApi();
@@ -450,11 +520,14 @@ function apiTask(req: any, res: any): void {
       "开放": ["read", "write", "edit", "bash", "powershell", "ls", "find", "grep",
              "agent-desktop", "ego-browser", "kn_recall", "ar_read", "ar_dispatch"],
     };
-    const tools = TOOL_SETS[String(task.tools ?? "标准")];
+    const tools = Array.isArray(task.tools) ? task.tools.map(String) : TOOL_SETS[String(task.tools ?? "标准")];
     const payload = JSON.stringify({
       subject: goal, to: task.to ?? "agent:local", kind: task.kind ?? "task",
       agent: task.agent ?? "pi", ...(task.profile ? { profile: task.profile } : {}),
       ...(task.model ? { model: task.model } : {}), ...(tools ? { tools } : {}),
+      /* R5：审批模式真的进 spec（permission 由 gate 消费；effort 落 budget.effort） */
+      ...(task.permission ? { permission: String(task.permission) } : {}),
+      ...(task.effort ? { budget: { depth_left: 2, effort: String(task.effort) } } : {}),
       ...(task.accept ? { accept: task.accept } : {}), ev_id: `wb-${Date.now().toString(36)}`,
     });
     const child = execFile(process.execPath, [AR_CLI, "dispatch"],
@@ -723,6 +796,11 @@ const server = createServer((req, res) => {
     if (req.method === "GET" && p === "/api/proposals") return void apiProposalsList(res, url.searchParams.get("status"), url.searchParams.get("auto"));
     if (req.method === "GET" && p === "/api/settings") return void apiSettingsGet(res);
     if (req.method === "POST" && p === "/api/settings") return void apiSettingsPost(req, res);
+    if (req.method === "GET" && p === "/api/git/status") return void apiGitStatus(res, url.searchParams.get("run"));
+    if (req.method === "GET" && p === "/api/git/diff") return void apiGitDiff(res, url.searchParams.get("run"), url.searchParams.get("path"));
+    if (req.method === "POST" && p === "/api/git/commit") return void apiGitCommitAsk(req, res);
+    if (req.method === "POST" && p === "/api/git/commit/approve") return void apiGitCommitApprove(req, res);
+    if (req.method === "POST" && p === "/api/git/commit/reject") return void apiGitCommitReject(req, res);
     if (req.method === "GET" && (p.match(/^\/api\/proposals\/([^/]+)$/) as RegExpMatchArray | null)) {
       const g = p.match(/^\/api\/proposals\/([^/]+)$/)!;
       const slug = decodeURIComponent(g[1]);
@@ -804,6 +882,7 @@ const server = createServer((req, res) => {
 });
 
 server.listen(PORT, HOST, () => console.log(`[workbench] http://${HOST}:${PORT}  runs=${RUNS}`));
+
 
 
 

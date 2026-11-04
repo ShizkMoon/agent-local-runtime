@@ -313,6 +313,28 @@ export interface RunView {
   profile: string | null;
   /** R4：run.json.parallel（设置面板只读展示并发上限；缺省 null） */
   parallel: number | null;
+  /** R5：根节点 spec.permission（supervised / full）；老 run 没有就是 null */
+  permission: string | null;
+  /** R5：根节点 spec.tools（审批模式徽标的另一半依据） */
+  tools: string[] | null;
+  /** R5：根节点 spec.model（模型回显） */
+  model: string | null;
+  /** R5：根节点 spec.budget.effort（档位回显；旧 run 可能没有） */
+  effort: string | null;
+  /** R5：审批模式（只读 / 可编辑 / 全权限）—— 由 permission + tools 推，null = 未知 */
+  mode: "readonly" | "edit" | "full" | null;
+}
+
+/** R5：审批模式判定（徽标与设置面板共用；只读靠工具面推，全权限靠 permission） */
+const READONLY_TOOLS = new Set(["read", "ls", "find", "grep", "kn_recall", "ar_read", "ev_read", "ev_list"]);
+export function approvalModeOf(permission: unknown, tools: unknown): "readonly" | "edit" | "full" | null {
+  const perm = String(permission ?? "");
+  if (perm === "full") return "full";
+  const t = Array.isArray(tools) ? tools.map(String) : null;
+  if (t && t.length && t.every(x => READONLY_TOOLS.has(x))) return "readonly";   // 工具面全在只读集里
+  if (perm === "supervised") return "edit";
+  if (t && t.length) return "edit";
+  return null;
 }
 
 export interface InboxItem {
@@ -323,8 +345,10 @@ export interface InboxItem {
   opts: [string, string, string][];
   gate: { run: number; nm: string; pd: string; sn: string };
   /** R3：inbox 里的提案卡（点开跳「提案」页签并选中 slug） */
-  kind?: "proposal";
+  kind?: "proposal" | "git";
   prop?: { slug: string; risk: string };
+  /** R5：git 提交审批卡（批准才执行 git commit） */
+  git?: { message: string; files: number; created_at: string | null };
 }
 
 export interface ViewPayload {
@@ -1311,7 +1335,7 @@ function runFingerprint(runsDir: string, rootId: string, paths: string[]): strin
     const d = join(base, "nodes", ...p.split("/"));
     return one(d) + "," + one(join(d, "events.jsonl")) + "," + one(join(d, "result.json")) + "," + one(join(d, "spec.json"));
   });
-  return [one(base), one(join(base, "run.json")), one(join(base, "nodes")), ...nodeMs].join("|");
+  return [one(base), one(join(base, "run.json")), one(join(base, "nodes")), one(join(base, "git-ask.json")), ...nodeMs].join("|");
 }
 
 function buildRunPart(runsDir: string, rootId: string, meta: any, now: number, stepLines: number, statTtl: number, paths: string[]): RunPart {
@@ -1388,6 +1412,12 @@ function buildRunPart(runsDir: string, rootId: string, meta: any, now: number, s
       sum: rootNode?.r?.summary ?? "",                                   // 摘要（根 result）
       profile: typeof rootNode?.spec?.profile === "string" ? rootNode.spec.profile : null,
       parallel: typeof meta?.parallel === "number" ? meta.parallel : null,
+      /* R5：审批模式 / 模型 / 档位都从根 spec 回显（派发时真的写进了 spec 才算数） */
+      permission: typeof rootNode?.spec?.permission === "string" ? rootNode.spec.permission : null,
+      tools: Array.isArray(rootNode?.spec?.tools) ? rootNode.spec.tools.map(String) : null,
+      model: typeof rootNode?.spec?.model === "string" ? rootNode.spec.model : null,
+      effort: typeof rootNode?.spec?.budget?.effort === "string" ? rootNode.spec.budget.effort : null,
+      mode: approvalModeOf(rootNode?.spec?.permission, rootNode?.spec?.tools),
       chips, tree, arts,
       steps: rootSteps,                                                  // S17：Run 详情工具时间线
       groups: groupSteps(rootSteps),                                     // S25：渲染分段（时间顺序）
@@ -1435,6 +1465,22 @@ function buildRunPart(runsDir: string, rootId: string, meta: any, now: number, s
         });
       }
     }
+    // R5：git 提交审批卡（批准前不执行任何 git 操作；拒绝只删 ask）
+    try {
+      const ask = readJson<any>(join(runsDir, rootId, "git-ask.json"));
+      if (ask && typeof ask.message === "string") {
+        const nFiles = Array.isArray(ask.files) ? ask.files.length : 0;
+        inboxLocal.push({
+          id: `git:${rootId}`, kind: "git",
+          t: "提交改动：" + String(ask.message).split("\n")[0].slice(0, 60),
+          d: `${nFiles} 个文件待提交 · 批准后才执行 git add -A && git commit`,
+          crumb: [meta?.subject ?? rootId, "工作区"],
+          opts: [["批准提交", "", "已提交"], ["拒绝", "", "已拒绝"]],
+          gate: { run: 0, nm: "工作区", pd: "", sn: "" },
+          git: { message: String(ask.message), files: nFiles, created_at: ask.created_at ?? null },
+        });
+      }
+    } catch { /* 没有 ask 就是没有 */ }
     return { view, inbox: inboxLocal, settled: settledLocal };
   }
 }
@@ -1524,6 +1570,8 @@ function isAutoApplied(p: any): boolean {
   } catch { /* 目录读不到就当不是自动应用 */ }
   return false;
 }
+
+
 
 
 

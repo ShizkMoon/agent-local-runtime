@@ -761,8 +761,27 @@ button.stp-h:hover{background:var(--hov)}
 .planc-t{margin:6px 0 0;white-space:pre-wrap;font-family:var(--f-serif);font-size:14.5px;line-height:1.7;color:var(--t1);max-height:340px;overflow:auto}
 .planc-f{display:flex;align-items:center;gap:10px;margin-top:12px;padding-top:10px;border-top:1px solid var(--ln);flex-wrap:wrap}
 .planc-h{font-size:12px;color:var(--t3)}
-</style>
-</head>
+/* R5：审批模式徽标 / Git 页签 / 通知 */
+.th-badges{display:flex;align-items:center;gap:6px;flex:none}
+.mbadge{display:inline-flex;align-items:center;height:18px;padding:0 7px;border-radius:999px;border:1px solid var(--ln);font-size:11px;color:var(--t2);background:var(--s2);white-space:nowrap}
+.mbadge.ro{color:var(--t2);border-color:var(--ln);background:var(--s1)}
+.mbadge.full{color:var(--fig);border-color:color-mix(in srgb,var(--fig) 45%,var(--ln));background:color-mix(in srgb,var(--fig) 8%,transparent)}
+.mbadge.muted{color:var(--t3);font-family:var(--f-mono);font-size:10.5px}
+.gitl{display:flex;align-items:center;gap:8px;width:100%;padding:6px 8px;border:1px solid var(--ln);border-radius:var(--r-ctl);background:var(--s2);font-size:12.5px;margin-bottom:6px}
+.gitl:hover{border-color:var(--ln-hi);background:var(--s3)}
+.gitl .gp{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;font-family:var(--f-mono);font-size:11.5px;color:var(--t1);text-align:left}
+.gitc{flex:none;width:18px;height:18px;border-radius:5px;display:inline-flex;align-items:center;justify-content:center;font-size:10.5px;font-weight:var(--w-md)}
+.gitc.A{background:color-mix(in srgb,var(--ok) 16%,transparent);color:var(--ok)}
+.gitc.M{background:color-mix(in srgb,var(--warn) 18%,transparent);color:var(--warn)}
+.gitc.D{background:color-mix(in srgb,var(--fig) 16%,transparent);color:var(--fig)}
+.gitnum{flex:none;font-family:var(--f-mono);font-size:11px;color:var(--t3)}
+.gitnum .a{color:var(--ok)} .gitnum .d{color:var(--fig)}
+.gitcbox{display:flex;gap:6px;margin-top:8px}
+.gitcbox input{flex:1;min-width:0;padding:6px 9px;border:1px solid var(--ln);border-radius:var(--r-ctl);background:var(--s1);color:var(--t1);font:inherit;font-size:12.5px}
+.gitmsg{margin:6px 0 0;padding:7px 9px;border:1px solid var(--ln);border-radius:var(--r-ctl);background:var(--s1);font-family:var(--f-mono);font-size:11.5px;color:var(--t2);white-space:pre-wrap;max-height:90px;overflow:auto}
+.gitcard .opts{margin-top:8px}
+
+</style></head>
 <body>
 <div id="app">
 
@@ -794,6 +813,7 @@ button.stp-h:hover{background:var(--hov)}
   <main id="center">
     <header class="th-head">
       <span class="crumb"><b id="thTitle">AICA 工作台</b></span>
+      <span class="th-badges" id="thBadges"></span>
       <span class="right">
         <span class="st-word" id="thSt" hidden><i></i><span id="thStT"></span></span>
         <button class="vb-btn" id="vbBtn" title="信息密度：详细 = 组头 + 每条单行；紧凑 = 只留结论 + 一行统计">详细</button>
@@ -842,15 +862,18 @@ button.stp-h:hover{background:var(--hov)}
       <button class="rp-tab" data-p="props">提案 <span class="bdg" id="rpPropsBdg" hidden>0</span></button>
       <button class="rp-tab" data-p="arts">产物</button>
       <button class="rp-tab" data-p="subs">子代理</button>
+      <button class="rp-tab" data-p="git">Git</button>
     </div>
     <div class="rp-body">
       <div class="rp-cells" id="pane-inbox"></div>
       <div class="rp-pane" id="pane-props" hidden><div id="propDock"></div></div>
       <div class="rp-pane" id="pane-arts" hidden><div id="artDock"></div></div>
       <div class="rp-pane" id="pane-subs" hidden><div id="subDock"></div></div>
+      <div class="rp-pane" id="pane-git" hidden><div id="gitDock"></div></div>
     </div>
 
     <div class="rp-foot">
+      <span class="dset-hint" id="dsetHint" title="拨盘只影响之后派发的 run，已在跑的 run 不改">下一轮生效</span>
       <button class="dset" id="dset"><span id="dsetText">任务 · 标准 · flash-jailbreak · 高</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg></button>
       <div class="dpop" id="dpop"></div>
     </div>
@@ -1230,6 +1253,7 @@ function renderRun(silent){
   if(!r){ /* 空态：解释"为什么空、下一步能做什么"，不是一句"没有"（P17） */
     $("#thTitle").textContent = "AICA 工作台";
     setStatusWord(null);
+    renderModeBadge(null);
     ci.innerHTML = '<div class="empty-note empty-2"><b>还没有任务</b>'+
       '<span>在下方输入框派发一件，或按 <b>/</b> 聚焦输入。</span>'+
       '<span class="hint">有任务时，这里先给结论，再给过程。</span></div>';
@@ -1237,6 +1261,7 @@ function renderRun(silent){
   }
   $("#thTitle").textContent = r.title || "(未命名任务)";
   setStatusWord(r);
+  renderModeBadge(r);   /* R5：审批模式 / 模型 / 档位徽标 */
 
   var h = "";
   /* ① 用户消息：只有它带来"标题没说过的话"时才渲染（P3 一条信息只出现一次） */
@@ -1734,9 +1759,11 @@ function switchPane(p){
   $("#pane-props").hidden = p!=="props";
   $("#pane-arts").hidden  = p!=="arts";
   $("#pane-subs").hidden  = p!=="subs";
+  $("#pane-git").hidden   = p!=="git";
   if(p==="props") renderProps();
   if(p==="arts") renderArts();
   if(p==="subs") renderSubs(subsNd);
+  if(p==="git") renderGit();
 }
 each(".rp-tab",function(t){
   t.addEventListener("click",function(){ switchPane(t.dataset.p); });
@@ -1789,6 +1816,7 @@ function renderInbox(){
   $("#pane-inbox").innerHTML = INBOX.length ? INBOX.map(function(c){
     if(c.kind === "approve") return approvalCardHtml(c);
     if(c.kind === "proposal") return proposalCardHtml(c);
+    if(c.kind === "git") return gitCardHtml(c);
     return gateCardHtml(c);
   }).join("") : emptyInboxHtml();
   each("#pane-inbox .opt",function(el){
@@ -1798,6 +1826,7 @@ function renderInbox(){
       if(!c) return;
       if(c.kind === "approve"){ var o = c.opts[+el.dataset.i]; decideApproval(card, c, {decision:o.decision, remember:o.scope}); }
       else if(c.kind === "proposal"){ openProposalInbox(c); }
+      else if(c.kind === "git"){ decideGitCommit(card, c, el.dataset.v); }
       else resolveCard(card, el.dataset.v, el.dataset.l);
     });
   });
@@ -1827,6 +1856,8 @@ function renderInbox(){
     });
   });
   renderBadge();
+  updateTitleUnread();     /* R5：标题 (N) 未读 */
+  checkNotifications();    /* R5：失焦时弹通知（一次去重） */
 }
 /* 普通 inbox 卡（gate.json / ev_gate 提问）：文案与选项来自 view.ts 投影 */
 function gateCardHtml(c){
@@ -2011,9 +2042,19 @@ var DIALS = [
   ["模式",["任务","提问","场景"]],
   ["权限",["标准","受限","开放"]],
   ["模型",["opencode-pool/deepseek-v4.1-flash-jailbreak","opencode-pool/deepseek-v4.1-flash","opencode-pool/deepseek-v4.1-flash-nsfw"]],
-  ["推理",["低","中","高"]]
+  ["推理",["低","中","高"]],
+  ["审批",["可编辑","只读","全权限"]]
 ];
-var dsel = [0,0,0,0];
+/* R5：审批模式 → spec 映射（只读收紧工具面；全权限放开 permission，仍受 gate critical 硬拒） */
+var MODE_MAP = {
+  "可编辑": { tools: null, permission: "supervised", word: "edit" },
+  "只读":   { tools: ["read","ls","find","grep","kn_recall","ar_read"], permission: "supervised", word: "readonly" },
+  "全权限": { tools: null, permission: "full", word: "full" }
+};
+var EFFORT_MAP = { "低":"low", "中":"medium", "高":"high" };
+function modeSel(){ return DIALS[4][1][dsel[4]] || "可编辑"; }
+function modeCfg(){ return MODE_MAP[modeSel()] || MODE_MAP["可编辑"]; }
+var dsel = [0,0,0,0,0];
 function dialText(s){ return s.indexOf("/")<0 ? s : s.split("/").pop().replace(/^deepseek-v4\.1-/,""); }
 try{
   var saved = JSON.parse(localStorage.getItem("aica-v1-dials-2")||"null");
@@ -2022,7 +2063,8 @@ try{
 }catch(e){}
 function renderDset(){
   $("#dsetText").textContent = DIALS.map(function(d,i){ return dialText(d[1][dsel[i]]); }).join(" · ");
-  $("#dset").classList.toggle("warn", dsel[1]!==0);   /* 权限 ≠ 标准 → warn tint */
+  /* R5：只有"全权限"用警示色；只读/可编辑保持中性 */
+  $("#dset").classList.toggle("warn", modeCfg().word === "full");
 }
 $("#dpop").innerHTML = DIALS.map(function(d,i){
   return '<button class="dpr" data-d="'+i+'"><span class="dk">'+d[0]+'</span><span class="dv">'+dialText(d[1][dsel[i]])+'</span></button>';
@@ -2086,9 +2128,10 @@ $("#sendBtn").addEventListener("click",function(){
       goal:v,
       kind:DIALS[0][1][dsel[0]],    /* 模式 */
       agent:"pi",
-      model:DIALS[2][1][dsel[2]],   /* 模型 */
-      tools:DIALS[1][1][dsel[1]],   /* 权限 → tools */
-      budget:DIALS[3][1][dsel[3]]   /* 推理 → budget */
+      model:DIALS[2][1][dsel[2]],   /* 模型 → spec.model */
+      tools:modeCfg().tools || DIALS[1][1][dsel[1]],   /* 只读用自己的工具面，否则用权限拨盘 */
+      permission:modeCfg().permission,                 /* → spec.permission（gate 消费） */
+      effort:EFFORT_MAP[DIALS[3][1][dsel[3]]] || "medium"  /* 推理档位 → spec.budget.effort */
     })})
     .then(function(r){ if(!r.ok) throw new Error("HTTP "+r.status); return r.json(); })
     .then(function(d){ if(d&&d.root_id) pendingSelectId=d.root_id; scheduleFetch(); })
@@ -2309,7 +2352,7 @@ function copyDiag(){
 /* ================= S24：命令面板 + 快捷键 ================= */
 var palOpen = false, palItems = [], palSel = 0, palTrigger = null;
 function focusFirstApproval(){
-  var card = document.querySelector("#pane-inbox .incard:not(.res):not(.gone):not(.propcard)");
+  var card = document.querySelector("#pane-inbox .incard:not(.res):not(.gone):not(.propcard):not(.gitcard)");
   if(!card) return false;
   try{ switchPane("inbox"); }catch(e){}
   var b = card.querySelector("button.opt");
@@ -2368,7 +2411,7 @@ function moveRun(d){
   selectRun(i);
 }
 function doFirstApproval(kind){
-  var el = document.querySelector("#pane-inbox .incard:not(.res):not(.gone):not(.propcard)");
+  var el = document.querySelector("#pane-inbox .incard:not(.res):not(.gone):not(.propcard):not(.gitcard)");
   if(!el){ toast("当前没有待裁决项"); return; }
   var btns = el.querySelectorAll("button.opt");
   if(!btns.length) return;
@@ -2451,6 +2494,9 @@ function bindChrome(){
   }
   bindPropUi();
   bindSettingsUi();
+  var nsw = $("#setNotify");
+  if(nsw){ nsw.checked = NOTIFY_ON; nsw.addEventListener("change", function(){ setNotifyOn(this.checked); }); }
+  paintNotifyNote();
   bindDelivUi();
 }
 /* ================= R3：子代理页签的行（path / 状态点 / 目标 / 耗时） ================= */
@@ -2634,6 +2680,7 @@ function renderSettings(){
     })
     .catch(function(e){ if(note) note.textContent = "读取失败：" + String(e).slice(0, 60); });
 
+  paintNotifyNote();
   /* 并发上限：只读，取当前 run 的 run.json.parallel */
   var r = RUNS[currentRun] || {};
   var par = $("#setPar");
@@ -2754,6 +2801,157 @@ function sendReply(rep, text, mode){
     .catch(function(e){ toast("回复失败：" + String(e).slice(0, 60)); });
 }
 
+/* ================= R5：审批模式 / 模型徽标（run 头） ================= */
+function modeWord(r){
+  if(!r || !r.mode) return null;
+  return { readonly: "只读", edit: "可编辑", full: "全权限" }[r.mode] || null;
+}
+function renderModeBadge(r){
+  var host = $("#thBadges"); if(!host) return;
+  if(!r){ host.innerHTML = ""; return; }
+  var h = "";
+  var w = modeWord(r);
+  if(w) h += '<span class="mbadge '+esc(r.mode)+'" title="审批模式（派发时写进 spec.permission / tools）">'+w+'</span>';
+  if(r.model) h += '<span class="mbadge muted" title="模型：'+esc(r.model)+'（下一轮生效）">'+esc(String(r.model).split("/").pop().replace(/^deepseek-v4\.1-/,""))+'</span>';
+  if(r.effort) h += '<span class="mbadge muted" title="档位：'+esc(r.effort)+'">'+esc(r.effort)+'</span>';
+  host.innerHTML = h;
+}
+
+/* ================= R5：Git 页签（status / diff / 提交走审批卡） ================= */
+var GIT = { run:null, status:null };
+function renderGit(){
+  var dock = $("#gitDock"); if(!dock) return;
+  var r = RUNS[currentRun];
+  if(!r){ dock.innerHTML = '<div class="empty-note">先选一条 run</div>'; return; }
+  if(!GIT.status || GIT.run !== r.id) dock.innerHTML = '<div class="empty-note">读取 git 状态…</div>';
+  fetch("/api/git/status?run="+encodeURIComponent(r.id)).then(function(x){ return x.json(); }).then(function(d){
+    if(!d || !d.ok || !d.repo){
+      GIT = { run:r.id, status:null };
+      dock.innerHTML = '<div class="empty-note"><b>不是 git 仓库</b><br><span class="hint">'+
+        (d && d.cwd ? "当前目录："+esc(d.cwd) : "这条 run 没有可用的工作目录")+' —— 在仓库根派发的 run 才有 Git 面板。</span></div>';
+      return;
+    }
+    GIT = { run:r.id, status:d };
+    var files = d.files || [];
+    var h = '<div class="git-head"><b>'+esc(d.branch||"detached")+'</b><span class="hint">'+files.length+' 个改动</span></div>';
+    h += files.length ? files.map(function(f,i){
+      return '<button class="gitl" data-i="'+i+'"><span class="gitc '+esc(f.code)+'">'+esc(f.code)+'</span>'+
+        '<span class="gp">'+esc(f.path)+'</span>'+
+        '<span class="gitnum"><span class="a">+'+f.add+'</span> <span class="d">−'+f.del+'</span></span></button>';
+    }).join("") : '<div class="empty-note">工作区干净</div>';
+    h += '<div class="gitcbox"><input id="gitMsg" placeholder="提交说明（批准后才真的执行）" autocomplete="off"><button class="opt solid" id="gitAsk">提交…</button></div>';
+    dock.innerHTML = h;
+    each("#gitDock .gitl", function(el){
+      el.addEventListener("click", function(){ openGitDiff(r.id, files[+el.dataset.i]); });
+    });
+    var ask = $("#gitAsk");
+    if(ask) ask.addEventListener("click", function(){ askGitCommit(r.id); });
+  }).catch(function(e){ dock.innerHTML = '<div class="empty-note">读取失败：'+esc(String(e).slice(0,80))+'</div>'; });
+}
+function openGitDiff(runId, f){
+  var dock = $("#gitDock"); if(!f) return;
+  var host = $("#gitDiffHost");
+  if(!host){ host = document.createElement("div"); host.id = "gitDiffHost"; dock.appendChild(host); }
+  host.innerHTML = '<div class="empty-note">读补丁…</div>';
+  fetch("/api/git/diff?run="+encodeURIComponent(runId)+"&path="+encodeURIComponent(f.path)).then(function(x){ return x.json(); }).then(function(d){
+    var patch = String((d && d.patch) || "");
+    if(!patch){ host.innerHTML = '<div class="empty-note">这个文件没有正文补丁（二进制 / 只改名）</div>'; return; }
+    var lines = patch.split("\n");
+    var dv = { file:f.path, add:f.add, del:f.del, hunks:(patch.match(/^@@/gm)||[]).length,
+               patch:lines.slice(0,60), total:lines.length, truncated:lines.length>60 };
+    openDiffs["git:"+runId+"|"+f.path] = true;      /* 默认展开 */
+    host.innerHTML = diffsHtml({ id:"git:"+runId, diffs:[dv] });
+    bindDiffs("#gitDock");
+  }).catch(function(){ host.innerHTML = '<div class="empty-note">读不到补丁</div>'; });
+}
+function askGitCommit(runId){
+  var inp = $("#gitMsg"), msg = inp ? String(inp.value||"").trim() : "";
+  if(!msg){ toast("先写提交说明"); if(inp) inp.focus(); return; }
+  var btn = $("#gitAsk"); if(btn) btn.disabled = true;
+  fetch("/api/git/commit", {method:"POST", headers:{"content-type":"application/json"},
+    body:JSON.stringify({ run:runId, message:msg })})
+    .then(function(r){ return r.json().then(function(d){ return {s:r.status, d:d}; }); })
+    .then(function(x){
+      if(!x.d || !x.d.ok){ toast("提交被拦："+((x.d&&x.d.error)||("HTTP "+x.s))); if(btn) btn.disabled=false; return; }
+      toast("已生成审批卡：在「需要你」里批准后才提交");
+      if(inp) inp.value = "";
+      switchPane("inbox");
+      scheduleFetch();
+    })
+    .catch(function(e){ toast("提交失败："+String(e).slice(0,60)); if(btn) btn.disabled=false; });
+}
+/* git 提交审批卡（批准才执行 git；拒绝一条 git 命令都不跑） */
+function gitCardHtml(c){
+  var g = c.git || {};
+  var h = '<article class="incard gitcard" id="'+esc(c.id)+'">';
+  if(c.crumb) h += '<div class="icrumb">'+(c.crumb||[]).map(function(x,i){return (i?'<i>›</i>':'')+(i===c.crumb.length-1?'<b>'+esc(x)+'</b>':esc(x));}).join("")+'</div>';
+  h += '<h3>'+esc(c.t)+'</h3>';
+  h += '<p class="desc">'+esc(c.d||"")+'</p>';
+  if(g.message) h += '<pre class="gitmsg">'+esc(g.message)+'</pre>';
+  h += '<div class="opts"><button class="opt solid" data-v="approve" data-l="批准提交">批准提交</button>'+
+       '<button class="opt" data-v="reject" data-l="拒绝">拒绝</button></div>';
+  h += '<div class="verdict"></div></article>';
+  return h;
+}
+function decideGitCommit(card, c, act){
+  var runId = String(c.id||"").replace(/^git:/, "");
+  var verdict = card.querySelector(".verdict");
+  card.classList.add("res");
+  fetch("/api/git/commit/"+act, {method:"POST", headers:{"content-type":"application/json"}, body:JSON.stringify({run:runId})})
+    .then(function(r){ return r.json().then(function(d){ return {s:r.status, d:d}; }); })
+    .then(function(x){
+      if(!x.d || !x.d.ok){ card.classList.add("err"); if(verdict) verdict.textContent = "失败："+((x.d&&x.d.error)||("HTTP "+x.s)); return; }
+      if(verdict) verdict.textContent = act === "approve" ? ("已提交 "+(x.d.commit||"").slice(0,7)) : "已拒绝 · git 未改动";
+      toast(act === "approve" ? "已提交" : "已拒绝，git 没有被改动");
+      scheduleFetch();
+    })
+    .catch(function(){ card.classList.add("err"); if(verdict) verdict.textContent = "失败"; });
+}
+
+/* ================= R5：通知与未读 ================= */
+var NOTIFY_ON = (function(){ try { return localStorage.getItem("aica-v1-notify") !== "0"; } catch(e){ return true; } })();
+var notifiedIds = {}, lastAgg = {};
+function setNotifyOn(on){ NOTIFY_ON = !!on; try{ localStorage.setItem("aica-v1-notify", on ? "1":"0"); }catch(e){} paintNotifyNote(); }
+function windowHidden(){ try { return document.visibilityState === "hidden" || !document.hasFocus(); } catch(e){ return false; } }
+function fireNotify(title, body, tag, runId){
+  if(!NOTIFY_ON) return;
+  if(typeof Notification === "undefined") return;
+  if(Notification.permission === "default"){ try{ Notification.requestPermission(); }catch(e){} return; }
+  if(Notification.permission !== "granted") return;
+  if(notifiedIds[tag]) return;              /* 一次去重 */
+  notifiedIds[tag] = 1;
+  try{
+    var n = new Notification(title, { body: body || "", tag: tag });
+    n.onclick = function(){
+      try{ window.focus(); }catch(e){}
+      if(runId){ for(var i=0;i<RUNS.length;i++) if(RUNS[i].id===runId){ selectRun(i); break; } }
+      updateTitleUnread(); try{ n.close(); }catch(e){}
+    };
+  }catch(e){}
+}
+function checkNotifications(){
+  if(!windowHidden()) return;               /* 只在窗口不可见/失焦时打扰 */
+  (INBOX||[]).forEach(function(c){
+    if(!c || c.done) return;
+    fireNotify("需要你：" + (c.t||"待处理"), c.d || "", "inbox:"+c.id, null);
+  });
+  (RUNS||[]).forEach(function(r){
+    var prev = lastAgg[r.id];
+    lastAgg[r.id] = r.agg;
+    if(prev && prev !== "done" && r.agg === "done") fireNotify("已完成："+(r.title||r.id), "点开看结论", "done:"+r.id, r.id);
+  });
+}
+function updateTitleUnread(){
+  var n = 0;
+  try{ n = (typeof INBOX !== "undefined" && INBOX) ? INBOX.filter(function(c){ return c && !c.done; }).length : 0; }catch(e){}
+  document.title = (n ? "("+n+") " : "") + "AICA 工作台";
+}
+function paintNotifyNote(){
+  var el = $("#setNotifyNote");
+  if(el) el.textContent = NOTIFY_ON ? "已开启：失焦时弹通知，标题显示未读数" : "已关闭：不弹通知，标题也不显示未读数";
+  var sw = $("#setNotify"); if(sw) sw.checked = NOTIFY_ON;
+}
+
 if(document.readyState === "loading") document.addEventListener("DOMContentLoaded", bindChrome);
 else bindChrome();
 
@@ -2806,6 +3004,15 @@ else bindChrome();
       </div>
       <div class="set-note" id="setAutoNote">读取中…</div>
 
+      <div class="set-row2">
+        <div class="set-txt"><b>桌面通知</b>
+          <span class="set-sub">窗口不可见时，「需要你」和 run 结束会弹系统通知；标签页标题显示未读数</span></div>
+        <label class="sw" title="桌面通知">
+          <input type="checkbox" id="setNotify" aria-label="桌面通知"><span class="sw-t"><i></i></span>
+        </label>
+      </div>
+      <div class="set-note" id="setNotifyNote"></div>
+
       <div class="set-sec">并发上限</div>
       <div class="set-kv"><span>run.json.parallel</span><b id="setPar">—</b></div>
       <div class="set-sub">只读：由派发时的 run 决定；没写就是默认并发。</div>
@@ -2820,5 +3027,12 @@ else bindChrome();
 
 </body>
 </html>
+
+
+
+
+
+
+
 
 

@@ -16,6 +16,11 @@
    "sum": "拆分为 fetch / summarize 两个子节点",
    "profile": "orchestrator",
    "parallel": null,
+   "permission": null,
+   "tools": null,
+   "model": null,
+   "effort": null,
+   "mode": null,
    "chips": [
     [
      "pending",
