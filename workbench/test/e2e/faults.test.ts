@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 import { runScenario } from "./lib/scenario-run.mjs";
 import { badGateAns, diskReadonly, diskWritable, probeUnwritable, truncateEvents } from "./lib/faults.mjs";
 import { materialize, mkTmp, readCase } from "./lib/replay.mjs";
-import { buildView, pendingApproval, readEvents } from "../../view.ts";
+import { approvalState, buildView, GATE_DECISIONS, pendingApproval, readEvents } from "../../view.ts";
 import { rmSync } from "node:fs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -76,18 +76,29 @@ test("注入 3 · truncateEvents → 半行日志不炸投影，行数如实变�
   rmSync(runsDir, { recursive: true, force: true });
 });
 
-test("注入 4 · badGateAns → 非法决定不让节点变成功，但卡会消失（风险已记录）", (t) => {
+test("注入 4 · badGateAns → 非法 ans 仍算 pending（fail-closed），卡不消失、节点不变成功", (t) => {
   const runsDir = mkTmp("aica-e2e-badans-");
   const { case: c, nodeDir } = materialize(join(FIX, "approval-wait"), runsDir);
   assert.equal(pendingApproval(nodeDir, c.now), true, "注入前：这条审批应当还挂着");
   const inj = badGateAns(nodeDir);
   assert.equal(inj.applied, true);
-  assert.equal(pendingApproval(nodeDir, c.now), false, "写了 ans（哪怕非法）就不再算 pending —— 当前实现只看 mtime");
+  // S19 fail-closed：decision 不在 {allowed-once,rejected,cancelled,unavailable} 闭集 = 视为没答
+  const st = approvalState(nodeDir, c.now);
+  assert.equal(st.invalid, true, "非法 decision 必须被标成 invalid");
+  assert.equal(st.pending, true, "非法 ans 仍算 pending：卡留在「需要你」，不许悄悄收掉");
+  assert.equal(pendingApproval(nodeDir, c.now), true, "pendingApproval 与 approvalState 必须说同一件事");
   assert.equal(existsSync(join(nodeDir, "result.json")), false, "非法 ans 不许伪造出 result");
   let view;
   assert.doesNotThrow(() => { view = buildView(runsDir, { now: c.now }); });
   assert.notEqual(view.runs[0].status, "done", "非法 ans 绝不能让 run 变 done");
-  t.diagnostic("已知风险：view.pendingApproval 只比较 mtime，不校验 ans 内容；gate.ts 侧会 fail-closed，但 UI 卡会先消失");
+  const decisions = (view.runs[0].audits ?? []).map((a) => a.decision);
+  assert.ok(
+    decisions.includes("invalid-answer"),
+    `审计里要记 decision="invalid-answer"（实际 ${JSON.stringify(decisions)}）`,
+  );
+  t.diagnostic(
+    `fail-closed 生效：invalid=${st.invalid} pending=${st.pending} age_ms=${st.age_ms}；闭集=${GATE_DECISIONS.join("|")}`,
+  );
   rmSync(runsDir, { recursive: true, force: true });
 });
 
