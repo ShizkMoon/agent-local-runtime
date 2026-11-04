@@ -8,17 +8,29 @@
 
 启动时（`main.go`）：
 
-1. `GET http://127.0.0.1:4399/api/daemon` 返回 200 → 复用已在跑的桥，跳过 spawn；
-2. 否则 `spawn node <repo>/workbench/server.ts`，env 透传并补 `WB_PORT=4399`、
+1. 单实例：第二个进程拿到锁失败 → 把参数交给已运行的实例（`OnSecondInstance`：
+   `Show/Restore/Focus`）后直接退出，不会开出第二个窗口；
+2. `GET http://127.0.0.1:4399/api/daemon` 返回 200 → 复用已在跑的桥，跳过 spawn；
+3. 否则 `spawn node <repo>/workbench/server.ts`，env 透传并补 `WB_PORT=4399`、
    `AICA_STATE`（缺省 `%LOCALAPPDATA%\aica\state`），输出落
-   `<AICA_STATE>\workbench-server.log`，`CREATE_NO_WINDOW` 不弹控制台；
-3. 轮询 `GET /api/v1/view` 直到 200（每 250ms，15s 超时 → 原生报错对话框后退出）；
-4. 开 1440×900 窗口「AICA 工作台」加载 `/v1/index.html`；退出（窗口全关/Quit）
+   `<AICA_STATE>\workbench-server.log`，`CREATE_NO_WINDOW` 保证不弹控制台；
+4. 轮询 `GET /api/v1/view` 直到 200（每 250ms，15s 超时 → 原生报错对话框后退出）；
+5. 开 1440×900 窗口「AICA 工作台」加载 `/v1/index.html`；退出（窗口全关/Quit）
    只杀自己拉起的 node——复用的不动，桥内 detached 的 ar daemon 也不管。
 
-`server.ts` 定位顺序：环境变量 `AICA_WB_SERVER` → 源码相对（`shell/../server.ts`，
-`go run` 可用）→ 可执行文件相对（`../server.ts`、`../../workbench/server.ts`、
-`../../server.ts`）→ cwd 的 `workbench/server.ts`。
+壳自己的日志落 `<AICA_STATE>\workbench-shell.log`（GUI 子系统没有 stderr，
+启动失败只能从这里查；超过 1MB 自动清空重写）。
+
+`server.ts` 定位顺序：
+
+1. 环境变量 `AICA_WB_SERVER`；
+2. `%LOCALAPPDATA%\aica\shell.json` 的 `{"server": "..."}`（装到 Program Files 这类
+   远离源码树的位置时用它指路）；
+3. 源码相对（`shell/../server.ts`，`go run` 与源码树内构建可用）；
+4. 可执行文件所在目录逐级上溯 ≤8 层，找 `<dir>/workbench/server.ts` 或
+   `<dir>/server.ts`，要求同级有 `public/` 或 `src/` 作为标记——覆盖
+   `dist/windows-amd64/` 这类打包位置；
+5. cwd 逐级上溯 ≤8 层，同上。
 
 ## 前提
 
@@ -33,15 +45,27 @@
 ```sh
 cd workbench/shell
 
-# 开发：直接跑（会带一个控制台窗口，方便看 [aica-shell] 日志）
-go run .
+# 日常使用：测过的 GUI 二进制（无控制台窗口），双击 aica-workbench.exe 或桌面快捷方式
+go build -ldflags "-H windowsgui -s -w" -o aica-workbench.exe .
 
-# 简单二进制（GUI 子系统，无控制台）
-go build -ldflags "-H windowsgui" -o aica-workbench.exe .
-
-# 正式打包（MyGo CLI 作为 go tool 已 pin 在 go.mod；产出 build/windows-amd64/ 下
-# 的 AICA 工作台.exe + 安装包，走 mygo.json 的名称/图标/标识）
+# 正式打包（MyGo CLI 作为 go tool 已 pin 在 go.mod；产出 dist/windows-amd64/ 下的
+# AICA 工作台.exe + 安装包，走 mygo.json 的名称/图标/标识，图标来自 resources/icon.png）
 go tool mygo build
+
+# 开发：go run 会带一个控制台（编译期临时二进制是 console 子系统），只适合看日志
+go run .
+```
+
+桌面 / 开始菜单快捷方式指向 `dist/windows-amd64/AICA 工作台.exe`（图标已内嵌）；
+重装系统后重建：
+
+```powershell
+$ws = New-Object -ComObject WScript.Shell
+$lnk = $ws.CreateShortcut("$env:USERPROFILE\Desktop\AICA 工作台.lnk")
+$lnk.TargetPath      = "$PWD\dist\windows-amd64\AICA 工作台.exe"
+$lnk.WorkingDirectory = "$PWD\dist\windows-amd64"
+$lnk.IconLocation     = "$PWD\dist\windows-amd64\AICA 工作台.exe,0"
+$lnk.Save()
 ```
 
 `go tool mygo dev` 亦可：改 .go 自动重建重启。

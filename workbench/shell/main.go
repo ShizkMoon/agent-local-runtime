@@ -10,7 +10,9 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -38,10 +40,32 @@ var client = &http.Client{Timeout: 1500 * time.Millisecond}
 // nodeCmd 是本进程拉起的桥；为 nil 说明复用了已有 server，退出时不动它。
 var nodeCmd *exec.Cmd
 
+// mainWin 是唯一的主窗口；第二次启动时用它把已有窗口提到前台。
+var mainWin *mygo.Window
+
 func main() {
 	log.SetPrefix("[aica-shell] ")
+	// GUI 子系统没有 stderr，日志必须落文件，否则启动失败时无从查起。
+	if f := openLog(); f != nil {
+		defer f.Close()
+		log.SetOutput(io.MultiWriter(f, os.Stderr))
+	}
 
 	mygo.App.SetName(appTitle)
+
+	// 单实例：第二次启动不再开第二个窗口，而是唤醒已运行的那个（参数交给它后退出）。
+	if !mygo.App.RequestSingleInstanceLock() {
+		return
+	}
+	mygo.App.OnSecondInstance(func(args []string, workingDir string) {
+		if mainWin == nil {
+			return
+		}
+		mainWin.Show()
+		mainWin.Restore()
+		mainWin.Focus()
+	})
+
 	mygo.App.WhenReady(func() {
 		if serverUp() {
 			log.Printf("复用已有 workbench 桥 %s", baseURL)
@@ -53,7 +77,7 @@ func main() {
 			fail("workbench 桥未就绪", err)
 			return
 		}
-		mygo.NewWindow(mygo.WindowOptions{
+		mainWin = mygo.NewWindow(mygo.WindowOptions{
 			Title:  appTitle,
 			URL:    viewURL,
 			Width:  1440,
@@ -67,6 +91,27 @@ func main() {
 		stopServer()
 		log.Fatal(err)
 	}
+}
+
+// openLog 打开 <state>/workbench-shell.log（超过 1MB 先清空）；打不开就只写 stderr。
+func openLog() *os.File {
+	state := os.Getenv("AICA_STATE")
+	if state == "" {
+		state = filepath.Join(os.Getenv("LOCALAPPDATA"), "aica", "state")
+	}
+	if err := os.MkdirAll(state, 0o755); err != nil {
+		return nil
+	}
+	path := filepath.Join(state, "workbench-shell.log")
+	flags := os.O_APPEND | os.O_CREATE | os.O_WRONLY
+	if st, err := os.Stat(path); err == nil && st.Size() > 1<<20 {
+		flags = os.O_TRUNC | os.O_CREATE | os.O_WRONLY
+	}
+	f, err := os.OpenFile(path, flags, 0o644)
+	if err != nil {
+		return nil
+	}
+	return f
 }
 
 // fail 报错并退出：原生对话框（窗口尚未创建，WebView 不可用）。
@@ -106,37 +151,90 @@ func waitReady(timeout time.Duration) error {
 
 // serverPath 定位 <repo>/workbench/server.ts。候选按序：
 //  1. 环境变量 AICA_WB_SERVER（显式覆盖）；
-//  2. 源码位置（runtime.Caller）：shell/../server.ts —— go run 与源码树内构建均有效；
-//  3. 可执行文件相对：../server.ts（壳放 workbench/shell/）、../../workbench/server.ts
-//     （壳被拷到仓库根的 build/ 之类位置）、../../server.ts（壳放仓库根下两级目录）；
-//  4. 当前目录的 workbench/server.ts（从仓库根启动）。
+//  2. %LOCALAPPDATA%\aica\shell.json 的 {"server": "..."}（装机到 Program Files 时显式指路）；
+//  3. 源码位置（runtime.Caller）：shell/../server.ts —— go run 与源码树内构建均有效；
+//  4. 可执行文件所在目录逐级上溯（≤8 层），找 <dir>/workbench/server.ts 或 <dir>/server.ts，
+//     且同级要有 public/ 或 src/ 作为标记 —— 覆盖 shell/dist/windows-amd64/ 这类打包位置；
+//  5. 当前目录逐级上溯（≤8 层），同上（从仓库根或任意子目录启动都行）。
 func serverPath() (string, error) {
-	var cands []string
+	var explicit []string
 	if p := os.Getenv("AICA_WB_SERVER"); p != "" {
-		cands = append(cands, p)
+		explicit = append(explicit, p)
+	}
+	if p := configServer(); p != "" {
+		explicit = append(explicit, p)
 	}
 	if _, file, _, ok := runtime.Caller(0); ok {
-		cands = append(cands, filepath.Join(filepath.Dir(file), "..", "server.ts"))
+		explicit = append(explicit, filepath.Join(filepath.Dir(file), "..", "server.ts"))
 	}
-	if exe, err := os.Executable(); err == nil {
-		dir := filepath.Dir(exe)
-		cands = append(cands,
-			filepath.Join(dir, "..", "server.ts"),
-			filepath.Join(dir, "..", "..", "workbench", "server.ts"),
-			filepath.Join(dir, "..", "..", "server.ts"),
-		)
-	}
-	if wd, err := os.Getwd(); err == nil {
-		cands = append(cands, filepath.Join(wd, "workbench", "server.ts"))
-	}
-	for _, c := range cands {
+	for _, c := range explicit {
 		if abs, err := filepath.Abs(c); err == nil {
 			if st, err := os.Stat(abs); err == nil && !st.IsDir() {
 				return abs, nil
 			}
 		}
 	}
-	return "", fmt.Errorf("找不到 server.ts（试过 %v）；可设 AICA_WB_SERVER 指定", cands)
+
+	var discovered []string
+	if exe, err := os.Executable(); err == nil {
+		discovered = append(discovered, ancestors(filepath.Dir(exe))...)
+	}
+	if wd, err := os.Getwd(); err == nil {
+		discovered = append(discovered, ancestors(wd)...)
+	}
+	for _, c := range discovered {
+		if st, err := os.Stat(c); err == nil && !st.IsDir() && looksLikeWorkbench(c) {
+			return c, nil
+		}
+	}
+	return "", fmt.Errorf("找不到 server.ts（试过 %v）；可设 AICA_WB_SERVER 或在 %%LOCALAPPDATA%%\\aica\\shell.json 写 {\"server\": \"...\"}", append(explicit, discovered...))
+}
+
+// ancestors 返回 dir 及其上溯各级目录下的 workbench/server.ts 与 server.ts。
+func ancestors(dir string) []string {
+	out := make([]string, 0, 16)
+	for i := 0; i < 8; i++ {
+		out = append(out,
+			filepath.Join(dir, "workbench", "server.ts"),
+			filepath.Join(dir, "server.ts"),
+		)
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
+	}
+	return out
+}
+
+// looksLikeWorkbench：server.ts 旁边有 public/ 或 src/ 才算工作台桥，避免误认同名文件。
+func looksLikeWorkbench(serverTS string) bool {
+	dir := filepath.Dir(serverTS)
+	for _, marker := range []string{"public", "src"} {
+		if st, err := os.Stat(filepath.Join(dir, marker)); err == nil && st.IsDir() {
+			return true
+		}
+	}
+	return false
+}
+
+// configServer 读 %LOCALAPPDATA%\aica\shell.json 的 server 字段；没有就返回空。
+func configServer() string {
+	base := os.Getenv("LOCALAPPDATA")
+	if base == "" {
+		return ""
+	}
+	raw, err := os.ReadFile(filepath.Join(base, "aica", "shell.json"))
+	if err != nil {
+		return ""
+	}
+	var cfg struct {
+		Server string `json:"server"`
+	}
+	if json.Unmarshal(raw, &cfg) != nil {
+		return ""
+	}
+	return cfg.Server
 }
 
 // startServer 拉起 `node <repo>/workbench/server.ts`，env 透传并补 WB_PORT/AICA_STATE，
