@@ -4,8 +4,8 @@ import { spawn, execFileSync } from "node:child_process";
 import { appendFileSync, existsSync, readFileSync, mkdirSync, copyFileSync, writeFileSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { pendingNodes, appendEvent, readResult, writeResult, patchResult, writeSpec, writeWorker, clearWorker, abortWorker, nodeDir, RUNS_DIR, STATE } from "./runs.ts";
-import { tapStdout, readUsage, usageTokens, type UsageLedger } from "./transcribe.ts";
+import { pendingNodes, appendEvent, readResult, writeResult, patchResult, writeSpec, writeWorker, clearWorker, abortWorker, nodeDir, RUNS_DIR, STATE, writeCheckpoint, readCheckpoint, lastSeq, closeDanglingTools } from "./runs.ts";
+import { tapStdout, readUsage, usageTokens, type UsageLedger, type UsageTurn } from "./transcribe.ts";
 import type { SpecEnvelope } from "./envelope.ts";
 
 const POLL_MS = Number(process.env.AR_POLL_MS ?? 2000);
@@ -100,6 +100,16 @@ function userMessage(spec: SpecEnvelope, resumed = false): string {
     const learned = readFileSync(join(STATE, "memory", "learned.md"), "utf8").slice(0, LEARNED_INJECT_CAP).trim();
     if (learned) lines.push("", "## 经验教训", learned);
   } catch { /* 没有 learned.md 属常态 */ }
+  // S21：续跑 —— 进程中断/daemon 重启/人工回复后重新拉起，末尾明确要求接着做，别重来一遍
+  if (resumed) {
+    let where = "";
+    const m = /^node:([^/]+)\/(.+)$/.exec(String(spec.id ?? ""));
+    if (m) {
+      const cp = readCheckpoint(m[1], m[2]);
+      if (cp) where = `（上次停在 turn ${cp.last_turn}，事件 seq ${cp.last_event_seq}）`;
+    }
+    lines.push("", `- [恢复] 服务器重启/进程中断，从停下的地方继续，不要重复已完成的工作${where}`);
+  }
   return lines.join("\n");
 }
 
@@ -268,6 +278,8 @@ export function enforceTokenBudget(
 function spawnWorker(rootId: string, path: string, spec: SpecEnvelope, resumed = false, retried = false): void {
   const dir = nodeDir(rootId, path);
   running.add(spec.id);
+  // S21：续跑时先把上一轮没收回的 tool_call 补成 aborted 的工具结果（进程中断后它们永远不会返回）
+  const dangling = resumed ? closeDanglingTools(rootId, path) : 0;
   const mspec = materializeInputs(rootId, path, spec);   // S14：art:// 先物化，userMessage 见 inputs/<file>
   let file: string, args: string[], desc: string;
   try {
@@ -278,7 +290,7 @@ function spawnWorker(rootId: string, path: string, spec: SpecEnvelope, resumed =
     writeResult(rootId, path, { status: "failed", summary: `Worker 拉起失败：${String(e)}` });
     return;
   }
-  appendEvent(rootId, path, { kind: "spawn", data: { cmd: desc, agent: spec.agent ?? "pi", tools: toolAllowlist(mspec).join(",") } });
+  appendEvent(rootId, path, { kind: "spawn", data: { cmd: desc, agent: spec.agent ?? "pi", tools: toolAllowlist(mspec).join(","), resumed, ...(dangling ? { closed_tools: dangling } : {}) } });
   const t0 = Date.now();
   let settled = false;
   let killTimer: NodeJS.Timeout | undefined;
@@ -322,8 +334,11 @@ function spawnWorker(rootId: string, path: string, spec: SpecEnvelope, resumed =
   try {
     const child = spawn(file, args, { cwd: dir, stdio: ["ignore", "pipe", "pipe"], env: workerEnv(rootId, path), windowsHide: true });
     // S20 tokens 预算：turn 边界（usage.json 刚落账）判定，超限 → budget 事件 + abort（result.summary/reason 记 budget exceeded）
+    // S21 checkpoint：同一个 turn 边界写 checkpoint.json{last_turn,last_event_seq,at}，续跑时知道停在哪
     let budgetHit = false;
-    const guardBudget = (ledger: UsageLedger): void => {
+    const onTurn = (ledger: UsageLedger, turn: UsageTurn): void => {
+      try { writeCheckpoint(rootId, path, { last_turn: turn.i, last_event_seq: lastSeq(rootId, path), at: new Date().toISOString() }); }
+      catch { /* checkpoint 写不进去不阻断 */ }
       if (budgetHit) return;
       const res = enforceTokenBudget(spec.budget, usageTokens(ledger), {
         append: (rec) => appendEvent(rootId, path, rec),
@@ -332,7 +347,7 @@ function spawnWorker(rootId: string, path: string, spec: SpecEnvelope, resumed =
       });
       if (res === "exceeded") indexLog({ event: "budget_exceeded", root_id: rootId, node: spec.id, spent: usageTokens(ledger), limit: spec.budget?.tokens });
     };
-    tapStdout(child, dir, rootId, path, { onTurn: guardBudget });   // stdout → stdout.log 全量 + events.jsonl 增量转写
+    tapStdout(child, dir, rootId, path, { onTurn });   // stdout → stdout.log 全量 + events.jsonl 增量转写
     // worker.json 租约锁：pendingNodes 见 live 锁即跳过（防 daemon 崩溃重启后重复拉起同一会话）
     writeWorker(rootId, path, { pid: child.pid ?? -1, started_at: new Date().toISOString(), cmd: desc });
     // budget.minutes 超时：到点走同 abort 路径（taskkill 树 + 幂等 failed result），summary 记 timeout

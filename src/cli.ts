@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // ar CLI：无状态命令面。evd/受限入口/人工共用，统一 JSON envelope 输出
-import { createRun, writeSpec, readSpec, readResult, writeResult, checkRun, appendEvent, writeGate, resolveWaiting, abortWorker, RUNS_DIR, runsDir } from "./runs.ts";
+import { createRun, writeSpec, readSpec, readResult, writeResult, checkRun, appendEvent, appendCmdOnce, readEventsSince, writeGate, resolveWaiting, abortWorker, forkNode, RUNS_DIR, runsDir } from "./runs.ts";
 import { daemonLoop } from "./daemon.ts";
 import type { SpecEnvelope, NodeStatus } from "./envelope.ts";
 
@@ -99,11 +99,14 @@ async function main(): Promise<void> {
       const path = arg("--node") ?? "root";
       const spec = readSpec(rootId, path);
       if (!spec) return out(false, cmd, undefined, { code: "NO_NODE", path });
-      spec.reply = [...(spec.reply ?? []), { text: arg("--text") ?? (await readStdin()).trim(), ts: new Date().toISOString() }];
+      const text = arg("--text") ?? (await readStdin()).trim();
+      spec.reply = [...(spec.reply ?? []), { text, ts: new Date().toISOString() }];
       writeSpec(rootId, path, spec);
       // 隐式 resume：waiting 节点的 result 归档为 result.resolved.json，daemon 下一轮重新拉起
       const resumed = resolveWaiting(rootId, path);
-      return out(true, cmd, { node: spec.id, resumed });
+      // S21：命令回执幂等 —— 同一条回复重放不会刷出第二条 cmd 事件（spec.reply 里仍逐条留痕）
+      const fresh = appendCmdOnce(rootId, path, "reply", { text });
+      return out(true, cmd, { node: spec.id, resumed, receipt: fresh });
     }
     case "gate": {
       // Worker 侧调用（ev_gate 工具）：写 waiting result + gate.json，节点挂起等人工回复
@@ -113,6 +116,7 @@ async function main(): Promise<void> {
       const opts = arg("--opts")?.split(";").filter(Boolean);
       writeGate(rootId, path, { question, ...(opts?.length ? { opts } : {}) });
       const r = writeResult(rootId, path, { status: "waiting", summary: question });
+      appendCmdOnce(rootId, path, "gate", { question, opts: opts ?? [] });
       return out(true, cmd, r);
     }
     case "done":
@@ -127,6 +131,8 @@ async function main(): Promise<void> {
         status, summary: arg("--summary") ?? process.argv[3] ?? "",
         ...(Number.isFinite(st) && st > 0 ? { spent: { tokens: st } } : {}),
       });
+      // S21：同一条 done/fail 重放 → 只留一条 cmd 回执（result 本身早就幂等）
+      appendCmdOnce(rootId, path, cmd, { status, summary: arg("--summary") ?? process.argv[3] ?? "" });
       return out(true, cmd, r);
     }
     case "wait": {
@@ -137,6 +143,7 @@ async function main(): Promise<void> {
       const on = (arg("--on") ?? "").split(",").map((s) => s.trim()).filter(Boolean);
       writeGate(rootId, path, { question: "等待子节点", opts: [] });
       const r = writeResult(rootId, path, { status: "waiting", summary: `等待子节点：${on.join(", ") || "(空)"}`, wait_on: on });
+      appendCmdOnce(rootId, path, "wait", { on });
       return out(true, cmd, r);
     }
     case "event": {
@@ -151,6 +158,22 @@ async function main(): Promise<void> {
       const path = process.env.AR_NODE_PATH ?? arg("--node") ?? "root";
       return out(true, cmd, abortWorker(rootId, path, "aborted by user"));
     }
+    case "events": {
+      // S21：事件增量读（since = seq 游标；纯老文件退回行号语义，mode 字段自证）
+      const rootId = arg("--run") ?? process.argv[3];
+      const path = arg("--node") ?? "root";
+      const since = Math.max(0, Number(arg("--since") ?? 0) || 0);
+      if (!rootId) return out(false, cmd, undefined, { code: "USAGE", hint: "ar events --run <root> [--node root] [--since N]" });
+      return out(true, cmd, readEventsSince(rootId, path, since));
+    }
+    case "fork": {
+      // S21：把一个节点复制成新 run（spec 保留、result/events 清空、forked_from 记来源）
+      const rootId = arg("--run") ?? process.argv[3];
+      const path = arg("--node") ?? "root";
+      if (!rootId) return out(false, cmd, undefined, { code: "USAGE", hint: "ar fork --run <root> [--node root]" });
+      const forked = forkNode(rootId, path);
+      return forked ? out(true, cmd, forked) : out(false, cmd, undefined, { code: "NO_NODE", path });
+    }
     case "daemon": {
       runsDir();
       await daemonLoop({
@@ -164,7 +187,7 @@ async function main(): Promise<void> {
     default:
       return out(false, "help", undefined, {
         code: "USAGE",
-        commands: ["run-create", "dispatch", "node-create", "check", "reply", "gate", "done", "fail", "wait", "event", "abort", "daemon", "version"],
+        commands: ["run-create", "dispatch", "node-create", "check", "reply", "gate", "done", "fail", "wait", "event", "events", "fork", "abort", "daemon", "version"],
       });
   }
 }

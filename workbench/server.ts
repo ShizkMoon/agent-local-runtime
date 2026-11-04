@@ -12,6 +12,8 @@ import { execFile, execFileSync, spawn, type ChildProcess } from "node:child_pro
 import { buildView, okId, badSeg, readJson, safeJoinIn, nodePaths, nodeStatus, evHint, runPulse } from "./view.ts";
 // S19：审批决策闭集由 gate.ts 持有（唯一真相），桥只做校验与落盘
 import { GATE_DECISIONS } from "../aica-pi/extensions/gate.ts";
+// S21：事件增量读与 fork 复用 runs.ts 的唯一实现（seq 语义只在一处定义）
+import { readEventsSince, forkNode } from "../src/runs.ts";
 
 const PORT = Number(process.env.WB_PORT ?? 4399);
 const HOST = "127.0.0.1";
@@ -98,22 +100,32 @@ function apiNode(res: any, rootId: string, path: string): void {
 function apiEvents(res: any, rootId: string, path: string, q: URLSearchParams): void {
   const dir = safeJoin(rootId, "nodes", ...path.split("/"));
   if (!dir || !existsSync(dir)) return err(res, 404, "node not found");
-  const file = join(dir, "events.jsonl");
-  const lines = existsSync(file) ? readFileSync(file, "utf8").split("\n").filter(l => l.trim()) : [];
   const since = Math.max(0, Number(q.get("since") ?? 0) || 0);
   const tail = Math.max(0, Number(q.get("tail") ?? 0) || 0);
-  let start = since;
-  if (tail && start === 0) start = Math.max(0, lines.length - tail);
-  const slice = lines.slice(start, start + EVT_CAP);
-  const events = slice.map((l, i) => {
-    try { return { i: start + i, ...JSON.parse(l) }; }
-    catch { return { i: start + i, ts: null, kind: "_raw", data: { raw: l.slice(0, 500) } }; }
-  });
-  json(res, 200, { events, next: start + events.length, total: lines.length });
+  // S21：since 是 seq 游标（有 seq 的文件）；纯老文件自动退回行号语义（mode:"index"）保持兼容。
+  // worker 直写的事件没有 seq → seq 模式下列不出来，用 unsequenced 计数如实告知（不假装没丢）。
+  const r = readEventsSince(rootId, path, since);
+  let events = r.events;
+  if (tail && since === 0 && events.length > tail) events = events.slice(-tail);
+  let next = r.next;
+  if (events.length > EVT_CAP) {
+    events = events.slice(0, EVT_CAP);
+    const last = events[events.length - 1];
+    next = r.mode === "seq" ? (last.seq ?? next) : last.i + 1;   // 截断时 next 只承诺"已发完的部分"
+  }
+  json(res, 200, { events, next, total: r.total, mode: r.mode, unsequenced: r.unsequenced });
 }
 
-function apiArtifact(res: any, rootId: string, path: string, name: string): void {
-  if (badSeg(name) || name.includes("/")) return err(res, 400, "bad artifact name");
+// ---- S21：fork —— 把一个节点复制成新 run（spec 保留、result/events 清空、forked_from 记来源）----
+function apiFork(res: any, rootId: string, path: string): void {
+  const dir = safeJoin(rootId, "nodes", ...path.split("/"));
+  if (!dir || !existsSync(dir)) return err(res, 404, "node not found");
+  const forked = forkNode(rootId, path);
+  if (!forked) return err(res, 409, "fork failed：节点没有 spec.json");
+  json(res, 200, forked);
+}
+
+function apiArtifact(res: any, rootId: string, path: string, name: string): void {  if (badSeg(name) || name.includes("/")) return err(res, 400, "bad artifact name");
   const file = safeJoin(rootId, "nodes", ...path.split("/"), "artifacts", name);
   if (!file || !existsSync(file)) return err(res, 404, "artifact not found");
   const size = statSync(file).size;
@@ -446,6 +458,7 @@ const R = {
   abort: /^\/api\/runs\/([^/]+)\/node\/(.+)\/abort$/,
   transcript: /^\/api\/runs\/([^/]+)\/node\/(.+)\/transcript$/,
   retry: /^\/api\/runs\/([^/]+)\/node\/(.+)\/retry$/,
+  fork: /^\/api\/runs\/([^/]+)\/node\/(.+)\/fork$/,
   detail: /^\/api\/runs\/([^/]+)\/node\/(.+)$/,
   tree: /^\/api\/runs\/([^/]+)\/tree$/,
 };
@@ -489,6 +502,11 @@ const server = createServer((req, res) => {
       const [, id, np] = m;
       if (!okId(id) || np.split("/").some(badSeg)) return err(res, 400, "bad path");
       return apiApprove(req, res, id, np);
+    }
+    if (req.method === "POST" && (m = p.match(R.fork))) {
+      const [, id, np] = m;
+      if (!okId(id) || np.split("/").some(badSeg)) return err(res, 400, "bad path");
+      return apiFork(res, id, np);
     }
     if (req.method === "GET" && (m = p.match(R.transcript))) {
       const [, id, np] = m;

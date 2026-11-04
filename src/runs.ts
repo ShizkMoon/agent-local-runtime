@@ -1,5 +1,5 @@
 // runs/ 运行目录操作：唯一的运行状态源，全部纯文件
-import { mkdirSync, writeFileSync, readFileSync, existsSync, readdirSync, appendFileSync, renameSync, unlinkSync } from "node:fs";
+import { mkdirSync, writeFileSync, readFileSync, existsSync, readdirSync, appendFileSync, renameSync, unlinkSync, statSync, cpSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { join, resolve } from "node:path";
 import type { SpecEnvelope, ResultEnvelope, EventRecord } from "./envelope.ts";
@@ -80,6 +80,7 @@ export function writeResult(rootId: string, path: string, result: Omit<ResultEnv
   if (existing) return existing;
   const full: ResultEnvelope = { id: nodeId(rootId, path), finished_at: new Date().toISOString(), ...result, type: "result" };
   writeJson(file, full);
+  resetAttempts(rootId, path);   // S21：一次拉起正经落定 → 续跑计数清零（只有崩溃循环才会累到上限）
   appendFileSync(INDEX, JSON.stringify({ ts: full.finished_at, event: "result", root_id: rootId, node: full.id, status: full.status }) + "\n", "utf8");
   return full;
 }
@@ -95,8 +96,103 @@ export function patchResult(rootId: string, path: string, patch: Partial<ResultE
 }
 
 export function appendEvent(rootId: string, path: string, rec: Omit<EventRecord, "ts">): void {
-  const line = JSON.stringify({ ts: new Date().toISOString(), ...rec });
-  appendFileSync(join(nodeDir(rootId, path), "events.jsonl"), line + "\n", "utf8");
+  const file = join(nodeDir(rootId, path), "events.jsonl");
+  const key = `${rootId}\u0000${path}`;
+  const size = existsSync(file) ? statSync(file).size : 0;
+  const hit = seqCache.get(key);
+  let seq: number;
+  if (hit && hit.size === size) seq = hit.seq + 1;   // 常规路径：本进程上次写过之后没人动过文件
+  else {                                             // 首写 / 别的进程追加过（worker 直写事件）→ 重扫
+    const scan = scanEvents(file);
+    seq = Math.max(scan.lines, scan.maxSeq) + 1;
+  }
+  const line = JSON.stringify({ ts: new Date().toISOString(), ...rec, seq }) + "\n";
+  appendFileSync(file, line, "utf8");
+  seqCache.set(key, { seq, size: size + Buffer.byteLength(line, "utf8") });
+}
+
+// ---- S21：事件 seq / 增量读 / 命令幂等 ----
+
+// 节点内单调递增的事件序号：写时自增，缓存 (last seq, 文件字节数)，文件被别的进程追加过就重扫
+const seqCache = new Map<string, { seq: number; size: number }>();
+
+function scanEvents(file: string): { lines: number; maxSeq: number } {
+  if (!existsSync(file)) return { lines: 0, maxSeq: 0 };
+  let lines = 0, maxSeq = 0;
+  for (const l of readFileSync(file, "utf8").split("\n")) {
+    if (!l.trim()) continue;
+    lines += 1;
+    try {
+      const s = Number(JSON.parse(l)?.seq);
+      if (Number.isFinite(s) && s > maxSeq) maxSeq = s;
+    } catch { /* 坏行也占一行，仍然计数 */ }
+  }
+  return { lines, maxSeq };
+}
+
+export interface RawEvent {
+  /** 行号（0 基）：seq 之前的写法，仍保留（老客户端与 worker 直写的事件靠它定位） */
+  i: number;
+  /** 节点内单调序号；worker 直写 / 老文件里没有 → null */
+  seq: number | null;
+  ts: string | null;
+  kind: string;
+  data: any;
+}
+
+/** 读一个节点的全部事件（raw 形状，带 seq 与行号）；坏行降级成 _raw，不吞 */
+export function readEvents(rootId: string, path: string): RawEvent[] {
+  const file = join(nodeDir(rootId, path), "events.jsonl");
+  if (!existsSync(file)) return [];
+  const out: RawEvent[] = [];
+  readFileSync(file, "utf8").split("\n").forEach((l, i) => {
+    if (!l.trim()) return;
+    let ev: any;
+    try { ev = JSON.parse(l); }
+    catch { out.push({ i, seq: null, ts: null, kind: "_raw", data: { raw: l.slice(0, 300) } }); return; }
+    const s = Number(ev?.seq);
+    out.push({ i, seq: Number.isFinite(s) ? s : null, ts: typeof ev?.ts === "string" ? ev.ts : null, kind: String(ev?.kind ?? ""), data: ev?.data ?? null });
+  });
+  return out;
+}
+
+/** 最后一个 seq（写 checkpoint 的 last_event_seq 用）；没有 seq 的事件不算 */
+export function lastSeq(rootId: string, path: string): number {
+  let max = 0;
+  for (const e of readEvents(rootId, path)) if (e.seq !== null && e.seq > max) max = e.seq;
+  return max;
+}
+
+/**
+ * 增量读：since 之后的事件。
+ * 有 seq 的文件按 seq 过滤（mode:"seq"）；纯老文件没有 seq → 退回行号语义（mode:"index"）保持兼容。
+ * worker 直写的事件没有 seq（aica-pi/extensions/events.ts 不在本切片写域）→ seq 模式下列不出来，
+ * 用 unsequenced 计数如实告知，不假装"没有丢失"。
+ */
+export function readEventsSince(rootId: string, path: string, since = 0): {
+  events: RawEvent[]; next: number; mode: "seq" | "index"; total: number; unsequenced: number;
+} {
+  const all = readEvents(rootId, path);
+  const maxSeq = all.reduce((m, e) => (e.seq !== null && e.seq > m ? e.seq : m), 0);
+  const unsequenced = all.filter((e) => e.seq === null).length;
+  if (maxSeq === 0) {
+    const start = Math.max(0, since);
+    return { events: all.slice(start), next: all.length, mode: "index", total: all.length, unsequenced };
+  }
+  return { events: all.filter((e) => e.seq !== null && e.seq > since), next: maxSeq, mode: "seq", total: all.length, unsequenced };
+}
+
+/**
+ * 命令回执幂等：同一条命令 + 同一份载荷只留一条 kind:"cmd" 事件。
+ * 重复执行 ar done/fail/reply 时不再刷屏；载荷不同（例如两次不同的人工回复）仍然各留一条。
+ */
+export function appendCmdOnce(rootId: string, path: string, cmd: string, payload: Record<string, unknown> = {}): boolean {
+  const key = JSON.stringify(payload);
+  for (const e of readEvents(rootId, path)) {
+    if (e.kind === "cmd" && e.data?.cmd === cmd && JSON.stringify(e.data?.payload ?? {}) === key) return false;
+  }
+  appendEvent(rootId, path, { kind: "cmd", data: { cmd, payload } });
+  return true;
 }
 
 export interface UsageTurn {
@@ -124,16 +220,37 @@ export function writeGate(rootId: string, path: string, gate: { question: string
 }
 
 // ---- worker.json 租约锁（S3 · G29）：spawn 成功写、finish 删；pendingNodes 以它做防重入 ----
+// S21：pid 死了不再默默清锁重拉 —— 死锁 + 无 result 是"孤儿"，由 reapOrphan 给归宿（process-bound effect 不重放）
 export interface WorkerInfo {
   pid: number;
   started_at: string;
   cmd: string;
+  /** 该节点第几次被拉起（S21 续跑预算；计数器落 attempts.json，跨 daemon 重启不丢） */
+  attempts?: number;
 }
 
 const workerFile = (rootId: string, path: string): string => join(nodeDir(rootId, path), "worker.json");
+const attemptsFile = (rootId: string, path: string): string => join(nodeDir(rootId, path), "attempts.json");
 
-export function writeWorker(rootId: string, path: string, info: WorkerInfo): void {
-  writeJson(workerFile(rootId, path), info);
+/** 同一节点连续拉起多少次仍没有 result 就判"续跑耗尽"（>10 次停止续跑） */
+export const MAX_ATTEMPTS = 10;
+
+export function readAttempts(rootId: string, path: string): number {
+  try { return Math.max(0, Number(readJson<{ n: number }>(attemptsFile(rootId, path))?.n) || 0); }
+  catch { return 0; }
+}
+
+export function resetAttempts(rootId: string, path: string): void {
+  try { unlinkSync(attemptsFile(rootId, path)); } catch { /* 计数文件不在就算已清 */ }
+}
+
+export function writeWorker(rootId: string, path: string, info: { pid: number; started_at: string; cmd: string; attempts?: number }): WorkerInfo {
+  const prev = readWorker(rootId, path);
+  const attempts = info.attempts ?? Math.max(readAttempts(rootId, path), prev?.attempts ?? 0) + 1;
+  const full: WorkerInfo = { ...info, attempts };
+  writeJson(workerFile(rootId, path), full);
+  writeJson(attemptsFile(rootId, path), { n: attempts, at: full.started_at });
+  return full;
 }
 
 export function readWorker(rootId: string, path: string): WorkerInfo | null {
@@ -151,13 +268,85 @@ function pidAlive(pid: number): boolean {
   catch (e) { return (e as NodeJS.ErrnoException)?.code === "EPERM"; }
 }
 
-/** pendingNodes 防重入锁：worker.json 在且 pid 活 → true（skip）；pid 死文件在 → 删文件返回 false（按 pending 重拉，崩溃恢复） */
+/** pendingNodes 防重入锁：worker.json 在且 pid 活 → true（skip）。
+ *  pid 死但文件在 → **不再在这里清锁重拉**（S21：死锁是孤儿的证据，交给 reapOrphan 收尾） */
 export function workerLive(rootId: string, path: string): boolean {
   const w = readWorker(rootId, path);
-  if (!w) return false;
-  if (pidAlive(w.pid)) return true;
+  return !!w && pidAlive(w.pid);
+}
+
+/**
+ * S21：孤儿收尾 —— worker.json 在、pid 已死、且没有 result：
+ * 标 failed("orphaned") + 一条 orphan 事件 + 清锁，返回 true 表示"已给归宿，别再拉起"。
+ * 先写 result 再清锁（与 abortWorker 同款顺序）：任意时刻 pendingNodes 都不会把它判回待拉起。
+ */
+export function reapOrphan(rootId: string, path: string): boolean {
+  const w = readWorker(rootId, path);
+  if (!w || pidAlive(w.pid)) return false;
+  const dir = nodeDir(rootId, path);
+  if (existsSync(join(dir, "result.json"))) { clearWorker(rootId, path); return false; }   // 结果已落盘，只是锁没来得及清
+  const res: Partial<ResultEnvelope> & { reason?: string } = {
+    status: "failed",
+    summary: `orphaned：worker 进程已消失（pid ${w.pid}）且没有 result——daemon 崩溃/被杀，按 process-bound effect 不重放`,
+    reason: "orphaned",
+  };
+  writeResult(rootId, path, res);
+  appendEvent(rootId, path, { kind: "orphan", data: { pid: w.pid, attempts: w.attempts ?? readAttempts(rootId, path) } });
   clearWorker(rootId, path);
-  return false;
+  return true;
+}
+
+/** S21：续跑耗尽 —— 同一节点拉起次数超过上限仍无 result，停止续跑并留证据 */
+export function exhaustResume(rootId: string, path: string, attempts = readAttempts(rootId, path)): void {
+  const res: Partial<ResultEnvelope> & { reason?: string } = {
+    status: "failed",
+    summary: `resume exhausted：同一节点已拉起 ${attempts} 次仍没有 result（上限 ${MAX_ATTEMPTS}），停止续跑`,
+    reason: "resume exhausted",
+  };
+  writeResult(rootId, path, res);
+  appendEvent(rootId, path, { kind: "resume_exhausted", data: { attempts, limit: MAX_ATTEMPTS } });
+}
+
+// ---- S21：checkpoint（turn 边界快照；resume 时告诉 worker 从哪继续） ----
+export interface Checkpoint {
+  last_turn: number;
+  last_event_seq: number;
+  at: string;
+}
+
+export function writeCheckpoint(rootId: string, path: string, cp: Checkpoint): void {
+  writeJson(join(nodeDir(rootId, path), "checkpoint.json"), cp);
+}
+
+export function readCheckpoint(rootId: string, path: string): Checkpoint | null {
+  try { return readJson<Checkpoint>(join(nodeDir(rootId, path), "checkpoint.json")); } catch { return null; }
+}
+
+/**
+ * S21：进程中断后，上一轮发出的 tool_call 永远不会等到结果 ——
+ * 给每个没有收口、也没被补过的 call 追加一条 tool_execution{is_error:true, reason:"aborted"}。
+ * 幂等：补过的 call 不再补第二次。返回补齐条数。
+ */
+export function closeDanglingTools(rootId: string, path: string): number {
+  const open = new Map<string, string>();   // call_id → tool
+  for (const e of readEvents(rootId, path)) {
+    const id = e.data?.call_id ?? e.data?.callId;
+    if (typeof id !== "string" || !id) continue;
+    const tool = String(e.data?.tool ?? e.data?.toolName ?? "?");
+    const isStart = e.kind === "tool_call" || (e.kind === "tool_execution" && e.data?.phase === "start");
+    const isEnd = e.kind === "tool_result" || (e.kind === "tool_execution" && e.data?.phase !== "start");
+    if (isStart) open.set(id, tool);
+    else if (isEnd) open.delete(id);
+  }
+  let n = 0;
+  for (const [id, tool] of open) {
+    appendEvent(rootId, path, { kind: "tool_execution", data: {
+      phase: "end", call_id: id, tool, is_error: true, reason: "aborted",
+      output: "（进程中断，工具未返回结果）",
+    } });
+    n += 1;
+  }
+  return n;
 }
 
 /** abort：杀 worker 进程树 → 幂等写 failed result → 清锁 + abort 事件。cli abort / daemon 超时 / server DELETE 共用 */
@@ -200,7 +389,9 @@ function depPath(rootId: string, dep: string): string {
   return dep.startsWith(prefix) ? dep.slice(prefix.length) : dep;
 }
 
-/** 递归列出 run 下全部节点 path（nodes/root/a 嵌套；pendingNodes/checkRun 共用一份走法） */
+/** 递归列出 run 下全部节点 path（nodes/root/a 嵌套；pendingNodes/checkRun 共用一份走法）
+ *  S21：artifacts / inputs / session 是节点内的数据目录，不是子节点（以前会被 check 误列成 running） */
+const NODE_DATA_DIRS = new Set(["artifacts", "inputs", "session"]);
 export function listNodePaths(rootId: string): string[] {
   const nodesRoot = join(runDir(rootId), "nodes");
   if (!existsSync(nodesRoot)) return [];
@@ -208,7 +399,7 @@ export function listNodePaths(rootId: string): string[] {
   const walk = (dir: string, rel: string, depth: number): void => {
     if (depth > 6) return;
     for (const ent of readdirSync(dir, { withFileTypes: true })) {
-      if (!ent.isDirectory() || ent.name === "artifacts") continue;
+      if (!ent.isDirectory() || NODE_DATA_DIRS.has(ent.name)) continue;
       const childRel = rel ? `${rel}/${ent.name}` : ent.name;
       paths.push(childRel);
       walk(join(dir, ent.name), childRel, depth + 1);
@@ -224,11 +415,15 @@ export function pendingNodes(): { rootId: string; path: string; spec: SpecEnvelo
   const out: { rootId: string; path: string; spec: SpecEnvelope; resumed?: boolean }[] = [];
   for (const rootId of readdirSync(RUNS_DIR)) {
     for (const path of listNodePaths(rootId)) {
-      // worker.json 租约锁：live worker 在跑就 skip（daemon 重启也不二次拉起）；死锁文件已在上一步清掉
+      // worker.json 租约锁：live worker 在跑就 skip（daemon 重启也不二次拉起）
       if (workerLive(rootId, path)) continue;
       const spec = readSpec(rootId, path);
       if (!spec) continue;
+      // S21：死锁 + 无 result = 孤儿 → 标 failed("orphaned") 收尾，**不重放**（process-bound effect）
+      if (reapOrphan(rootId, path)) continue;
       const r = readResult(rootId, path);
+      // S21：续跑预算 —— 连续拉起太多次仍没有 result 就停止续跑（崩溃循环不会无限烧）
+      if (!r && readAttempts(rootId, path) >= MAX_ATTEMPTS) { exhaustResume(rootId, path); continue; }
       let resumed = false;
       if (r) {
         if (r.status === "waiting") {
@@ -272,4 +467,42 @@ export function checkRun(rootId: string): { meta: RunMeta | null; nodes: { path:
     return { path, status: r ? r.status : "running", summary: r?.summary };
   });
   return { meta, nodes };
+}
+
+// ---- S21：fork（把一个节点复制成新 Run 的根） ----
+
+export interface ForkResult {
+  root_id: string;                                   // 新 Run
+  node: string;                                      // 新节点 id（node:<新>/root）
+  path: string;                                      // 新 Run 里的路径（恒为 root）
+  forked_from: { root_id: string; path: string; at: string };
+}
+
+/**
+ * 分叉：复制节点目录到新 Run。
+ * 保留：spec（id 改写到新 run、去掉 parent、来源记 forked_from）、artifacts/ 与 inputs/（数据面成果）。
+ * 不带：result / events / usage / worker / gate / checkpoint（进程面与上一轮的结论，否则新 run 一开始就是"已完成"）。
+ * 也不带 session/：分叉是"换个走法重来一次"，要接着原上下文说话走 reply/resume 那条路。
+ */
+export function forkNode(rootId: string, path: string): ForkResult | null {
+  const spec = readSpec(rootId, path);
+  if (!spec) return null;
+  const src = nodeDir(rootId, path);
+  const forked_from = { root_id: rootId, path, at: new Date().toISOString() };
+  const goalLine = String(spec.goal ?? "").split("\n")[0].slice(0, 60);
+  const { rootId: newId } = createRun({ kind: "fork", subject: `分叉：${goalLine}` });
+  const dst = nodeDir(newId, "root");
+  mkdirSync(join(dst, "artifacts"), { recursive: true });
+  const next = { ...spec, id: nodeId(newId, "root"), forked_from } as SpecEnvelope & { forked_from?: unknown };
+  delete (next as { parent?: string }).parent;        // 新 run 里没有父节点，留着就是撒谎
+  writeJson(join(dst, "spec.json"), next);
+  for (const sub of ["artifacts", "inputs"]) {
+    try { if (existsSync(join(src, sub))) cpSync(join(src, sub), join(dst, sub), { recursive: true }); }
+    catch { /* 单个数据目录复制失败不阻断 fork */ }
+  }
+  const metaFile = join(runDir(newId), "run.json");
+  const meta = readJson<RunMeta & { forked_from?: unknown }>(metaFile);
+  if (meta) writeJson(metaFile, { ...meta, forked_from });
+  appendFileSync(INDEX, JSON.stringify({ ts: forked_from.at, event: "fork", root_id: newId, from: rootId, node: path }) + "\n", "utf8");
+  return { root_id: newId, node: nodeId(newId, "root"), path: "root", forked_from };
 }
