@@ -275,6 +275,8 @@ export interface RunView {
   id: string;
   /** run.json.kind：task / test / smoke…（P1：smoke/test 在左栏归到「测试」分组） */
   kind: string | null;
+  /** R3：title 以 smoke/test 开头（含空格写法）或 kind=test —— 左栏「测试」分组判据的唯一来源 */
+  test_like: boolean;
   title: string;
   status: "done" | "input" | "failed" | "working";
   /** S25：run 行只能看这个 —— max(所有节点)，blocked > failed > working > done；done 不冒泡 */
@@ -316,6 +318,9 @@ export interface InboxItem {
   crumb: string[];
   opts: [string, string, string][];
   gate: { run: number; nm: string; pd: string; sn: string };
+  /** R3：inbox 里的提案卡（点开跳「提案」页签并选中 slug） */
+  kind?: "proposal";
+  prop?: { slug: string; risk: string };
 }
 
 export interface ViewPayload {
@@ -1011,6 +1016,8 @@ interface NodeProj {
   plan: PlanView | null;
   sev: Severity | null;
   audits: AuditView[];
+  /** R3：节点产出的提案（events.jsonl 里 kind=proposal） */
+  proposals: { slug: string; risk: string; dir: string | null }[];
 }
 
 // ---- S26：mtime 缓存。stat 指纹不变 → 复用上次投影（投影里只放与时间无关的字段；
@@ -1033,6 +1040,7 @@ interface NodeCacheEntry {
   compactions: CompactionView[];
   plan: PlanView | null;
   audits: AuditView[];
+  proposals: { slug: string; risk: string; dir: string | null }[];
   turn: TurnView;
   sev: Severity | null;
   todo: { text: string; done: boolean }[] | null;
@@ -1177,6 +1185,7 @@ function projectNode(runsDir: string, rootId: string, path: string, now: number,
       compactions: compactionsOf(events),
       plan: planOf(events, todo),
       audits,
+      proposals: propsOf(events),
       turn: projectTurn(events, r, sn.live),
       sev: severityOf(r),
       todo: Array.isArray(todo?.items) ? todo.items : null, // S9 ev_todo 清单投影
@@ -1215,7 +1224,28 @@ function projectNode(runsDir: string, rootId: string, path: string, now: number,
     plan: c.plan,                 // S23：计划条
     sev: c.sev,                   // S23：裁决强度
     audits: c.audits,             // S26：审批审计对
+    proposals: c.proposals,       // R3：节点产出的提案
   };
+}
+
+/** 节点事件里的提案（kind=proposal → {slug,risk,dir}），同 slug 只留第一条 */
+function propsOf(events: EvLine[]): { slug: string; risk: string; dir: string | null }[] {
+  const out: { slug: string; risk: string; dir: string | null }[] = [];
+  for (const e of events) {
+    if (e.ev?.kind !== "proposal") continue;
+    const d: any = e.ev.data || {};
+    const slug = String(d.slug ?? "").trim();
+    if (!slug) continue;
+    if (out.some(p => p.slug === slug)) continue;
+    out.push({ slug, risk: String(d.risk ?? "low"), dir: typeof d.dir === "string" ? d.dir : null });
+  }
+  return out;
+}
+
+/** R3/P1：测试类 run 的判据 —— title 以 smoke/test 开头（后跟空格/连字符/下划线）或 kind=test */
+export function isTestLike(subject: unknown, kind?: unknown): boolean {
+  if (/^(smoke|test)[\s_-]/i.test(String(subject ?? ""))) return true;
+  return String(kind ?? "").toLowerCase() === "test";
 }
 
 /**
@@ -1343,6 +1373,8 @@ function buildRunPart(runsDir: string, rootId: string, meta: any, now: number, s
     const rootSteps = rootNode?.steps ?? [];
     const view: RunView = {
       id: rootId, kind: typeof meta?.kind === "string" ? meta.kind : null, title: meta?.subject ?? rootId, status,
+      // 判据放宽：`smoke test 1587:57` / `test_foo` / `smoke-1` 都算；只认前缀，不认正文里的 smoke
+      test_like: isTestLike(meta?.subject, meta?.kind),
       agg, agg_n: aggList.filter(a => a === agg).length,
       dur: mmss((ended ? Date.parse(ended) : now) - Date.parse(meta?.created_at ?? new Date(now).toISOString())),
       spent: spentTotal || null,
@@ -1374,6 +1406,28 @@ function buildRunPart(runsDir: string, rootId: string, meta: any, now: number, s
         t: q.split("\n")[0].slice(0, 80), d: q, crumb, opts,
         gate: { run: 0, nm: n.nm, pd: `回复已送达，${n.nm} 恢复执行`, sn: "已回复 · 节点恢复运行" },
       });
+    }
+    // R3 §9.5：节点产出的提案 → inbox 提案卡（点开跳「提案」页签）；已 applied/rejected 的不再打扰
+    const seenProp = new Set<string>();
+    for (const n of nodes) {
+      for (const p of n.proposals) {
+        if (seenProp.has(p.slug)) continue;
+        seenProp.add(p.slug);
+        const pdir = p.dir ?? join(runsDir, "..", "proposals", p.slug);
+        if (existsSync(join(pdir, "applied.json")) || existsSync(join(pdir, "rejected.json"))) continue;
+        let first = "";
+        try {
+          first = readFileSync(join(pdir, "proposal.md"), "utf8").split("\n")
+            .map(l => l.trim()).find(l => l && !l.startsWith("#")) ?? "";
+        } catch { first = ""; }
+        inboxLocal.push({
+          id: `proposal:${p.slug}`, kind: "proposal",
+          t: `提案：${p.slug}`, d: first.slice(0, 160) || "（提案没有摘要）",
+          crumb: [meta?.subject ?? rootId, n.nm], opts: [["查看提案", "", "已打开"]],
+          gate: { run: 0, nm: n.nm, pd: "", sn: "" },
+          prop: { slug: p.slug, risk: p.risk },
+        });
+      }
     }
     return { view, inbox: inboxLocal, settled: settledLocal };
   }
@@ -1421,9 +1475,19 @@ export function proposalDetail(dir: string): ProposalDetail | null {
     created_at: typeof meta?.created_at === "string" ? meta.created_at : null,
     verify_cmd: typeof verify?.cmd === "string" ? verify.cmd : null,
     proposal: read("proposal.md"),
-    patch: read("change.patch"),
+    // S28 写的是 patch.diff；change.patch 是早期命名，保留兼容
+    patch: read("patch.diff") || read("change.patch"),
     meta: meta ?? null,
   };
+}
+
+/**
+ * R3：列表项是权威（status/risk 由 S28 从 applied.json / rejected.json 算），
+ * 正文（proposal/patch/verify_cmd）只补缺。合并顺序写在这里，防止再犯。
+ */
+export function mergeProposal(detail: ProposalDetail | null, hit: any): any | null {
+  if (!detail) return null;
+  return { ...detail, ...(hit && typeof hit === "object" ? hit : {}) };
 }
 
 

@@ -5,6 +5,7 @@
    "kind": null,
    "title": "smoke-tools",
    "status": "done",
+   "test_like": true,
    "agg": "done",
    "agg_n": 1,
    "dur": "00:05",

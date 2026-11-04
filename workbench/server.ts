@@ -9,7 +9,7 @@ import { join, normalize, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFile, execFileSync, spawn, type ChildProcess } from "node:child_process";
 // S16：视图投影住在 view.ts（纯函数，runsDir 由参数传入）；本文件只做 HTTP 胶水
-import { buildView, okId, badSeg, readJson, safeJoinIn, nodePaths, nodeStatus, evHint, runPulse, viewCacheStats, clearViewCache, approvalState, proposalDetail } from "./view.ts";
+import { buildView, okId, badSeg, readJson, safeJoinIn, nodePaths, nodeStatus, evHint, runPulse, viewCacheStats, clearViewCache, approvalState, proposalDetail, mergeProposal } from "./view.ts";
 // S19：审批决策闭集由 gate.ts 持有（唯一真相），桥只做校验与落盘
 import { GATE_DECISIONS } from "../aica-pi/extensions/gate.ts";
 // S21：事件增量读与 fork 复用 runs.ts 的唯一实现（seq 语义只在一处定义）
@@ -372,7 +372,7 @@ async function apiProposalDetail(res: any, slug: string): Promise<void> {
   const d = proposalDetail(hit.dir);
   if (!d) return json(res, 404, { ok: false, error: "提案目录读不出来" });
   // 列表项的状态/风险是模块算出来的权威值（applied.json / rejected.json 决定），正文只是补充
-  json(res, 200, { ok: true, proposal: { ...d, ...hit } });
+  json(res, 200, { ok: true, proposal: mergeProposal(d, hit) });
 }
 
 async function apiProposalAct(req: any, res: any, slug: string, act: "apply" | "reject"): Promise<void> {
@@ -761,6 +761,7 @@ const server = createServer((req, res) => {
 });
 
 server.listen(PORT, HOST, () => console.log(`[workbench] http://${HOST}:${PORT}  runs=${RUNS}`));
+
 
 
 

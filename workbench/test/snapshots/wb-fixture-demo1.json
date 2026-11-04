@@ -5,6 +5,7 @@
    "kind": "meta.test",
    "title": "workbench 冒烟夹具",
    "status": "failed",
+   "test_like": false,
    "agg": "failed",
    "agg_n": 2,
    "dur": "1315:03",

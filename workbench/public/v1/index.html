@@ -1029,9 +1029,11 @@ function runCardHtml(r,i){
     '<span class="meta">'+esc(r.snippet)+'</span></button>';
 }
 /* R3/P1：smoke_ 前缀或 kind=test 的 run 归「测试」分组，不再混进「已结束」主列表 */
+/* R3/P1：测试类 run 的判据在 view.ts::test_like 单源；这里用同一正则兜底 title/snippet */
+var TEST_RE = /^(smoke|test)[\s_-]/i;
 function isTestRun(r){
   if(!r) return false;
-  return /^smoke[-_]/i.test(String(r.title||"")) || /^smoke[-_]/i.test(String(r.snippet||"")) || r.kind === "test";
+  return r.test_like === true || TEST_RE.test(String(r.title||"")) || TEST_RE.test(String(r.snippet||""));
 }
 var testOpen = (function(){ try{ return localStorage.getItem("aica-v1-testgroup")==="1"; }catch(e){ return false; } })();
 function renderSidebar(){
@@ -1053,9 +1055,13 @@ function renderSidebar(){
   $("#runList").innerHTML = live.length ? live.map(function(p){ return runCardHtml(p[0],p[1]); }).join("")
     : (!wait.length && !fail.length ? '<div class="empty-note">暂无运行中的任务</div>' : "");
 
-  /* 测试分组：活着的 test run + 已结束里 smoke-* 的记录（默认折叠，只给计数） */
+  /* 测试分组：活着的 test run + 已结束里的 test 类记录（默认折叠，只给计数） */
   var setTest = [], setNormal = [];
-  SETTLED.forEach(function(s,i){ (/^smoke[-_]/i.test(String(s[0]||"")) ? setTest : setNormal).push([s,i]); });
+  SETTLED.forEach(function(s,i){
+    var r = null;
+    for(var k=0;k<RUNS.length;k++) if(RUNS[k].id===s[2]){ r = RUNS[k]; break; }
+    (TEST_RE.test(String(s[0]||"")) || (r && isTestRun(r)) ? setTest : setNormal).push([s,i]);
+  });
   var testN = testRuns.length + setTest.length;
   $("#secTest").hidden = !testN;
   var cnt = $("#testCnt"); if(cnt) cnt.textContent = String(testN);
@@ -1733,7 +1739,9 @@ function renderBadge(){
 }
 function renderInbox(){
   $("#pane-inbox").innerHTML = INBOX.length ? INBOX.map(function(c){
-    return c.kind === "approve" ? approvalCardHtml(c) : gateCardHtml(c);
+    if(c.kind === "approve") return approvalCardHtml(c);
+    if(c.kind === "proposal") return proposalCardHtml(c);
+    return gateCardHtml(c);
   }).join("") : emptyInboxHtml();
   each("#pane-inbox .opt",function(el){
     el.addEventListener("click",function(){
@@ -1741,6 +1749,7 @@ function renderInbox(){
       var c = INBOX.filter(function(x){ return x.id === card.id; })[0];
       if(!c) return;
       if(c.kind === "approve"){ var o = c.opts[+el.dataset.i]; decideApproval(card, c, {decision:o.decision, remember:o.scope}); }
+      else if(c.kind === "proposal"){ openProposalInbox(c); }
       else resolveCard(card, el.dataset.v, el.dataset.l);
     });
   });
@@ -1783,6 +1792,24 @@ function gateCardHtml(c){
   }).join("")+'</div>';
   h += '<div class="verdict"></div></article>';
   return h;
+}
+/* R3 §9.5：inbox 提案卡 —— 点开跳「提案」页签并选中该 slug（不自造通知通道，走同一张卡位） */
+function proposalCardHtml(c){
+  var risk = String((c.prop||{}).risk || "low");
+  var h = '<article class="incard propcard" id="'+esc(c.id)+'">';
+  h += '<div class="icrumb">'+(c.crumb||[]).map(function(x,i){return (i?'<i>›</i>':'')+(i===c.crumb.length-1?'<b>'+esc(x)+'</b>':esc(x));}).join("")+'</div>';
+  h += '<h3>'+esc(c.t)+' <span class="risk risk-'+esc(risk)+'">'+esc(risk)+'</span></h3>';
+  h += '<p class="desc">'+esc(c.d||"（提案没有摘要）")+'</p>';
+  h += '<div class="opts"><button class="opt solid" data-v="open" data-l="查看提案">查看提案</button></div>';
+  h += '<div class="verdict"></div></article>';
+  return h;
+}
+/* 点提案卡：切到「提案」页签 + 选中该 slug（数据到齐后自动开详情） */
+var pendingPropSlug = null;
+function openProposalInbox(c){
+  pendingPropSlug = (c.prop && c.prop.slug) || null;
+  switchPane("props");
+  renderProps();
 }
 /* S19 审批卡：命令原文（等宽）+ 一行为什么 + 服务端 opts + 自由输入（= 拒绝并说明） */
 function approvalCardHtml(c){
@@ -2227,7 +2254,7 @@ function copyDiag(){
 /* ================= S24：命令面板 + 快捷键 ================= */
 var palOpen = false, palItems = [], palSel = 0, palTrigger = null;
 function focusFirstApproval(){
-  var card = document.querySelector("#pane-inbox .incard:not(.res):not(.gone)");
+  var card = document.querySelector("#pane-inbox .incard:not(.res):not(.gone):not(.propcard)");
   if(!card) return false;
   try{ switchPane("inbox"); }catch(e){}
   var b = card.querySelector("button.opt");
@@ -2286,7 +2313,7 @@ function moveRun(d){
   selectRun(i);
 }
 function doFirstApproval(kind){
-  var el = document.querySelector("#pane-inbox .incard:not(.res):not(.gone)");
+  var el = document.querySelector("#pane-inbox .incard:not(.res):not(.gone):not(.propcard)");
   if(!el){ toast("当前没有待裁决项"); return; }
   var btns = el.querySelectorAll("button.opt");
   if(!btns.length) return;
@@ -2419,6 +2446,13 @@ function renderProps(){
     each("#propDock .prop-item", function(el){
       el.addEventListener("click", function(){ openPropDetail(PROPS[+el.dataset.i]); });
     });
+    /* inbox 提案卡跳过来时：数据到齐再开详情（避免先渲染列表再被冲掉） */
+    if(pendingPropSlug){
+      var want = pendingPropSlug; pendingPropSlug = null;
+      var hit = PROPS.filter(function(p){ return p.slug === want; })[0];
+      if(hit) setTimeout(function(){ openPropDetail(hit); }, 30);
+      else toast("提案 "+want+" 已经不在了（可能已被应用/拒绝）");
+    }
   }).catch(function(e){ dock.innerHTML = '<div class="empty-note">读取失败：'+esc(String(e).slice(0,80))+'</div>'; });
 }
 function openPropDetail(p){
@@ -2434,6 +2468,8 @@ function openPropDetail(p){
     var md = String(q.proposal||"").split("\n").slice(0, 40).join("\n");
     var dv = patchToDiffView(q.slug || p.slug, q.patch);
     var st = String(q.status || p.status || "pending");
+    /* 提案详情里补丁默认展开（详情页就是来看补丁的） */
+    if(dv){ try{ openDiffs["prop-"+(q.slug||p.slug)+"|"+dv.file] = true; }catch(e){} }
     var acts = st === "pending"
       ? '<div class="prop-act">'+
           '<button class="opt solid" id="propApply">应用</button>'+
@@ -2535,4 +2571,5 @@ else bindChrome();
 
 </body>
 </html>
+
 

@@ -5,6 +5,7 @@
    "kind": null,
    "title": "smoke test",
    "status": "working",
+   "test_like": true,
    "agg": "working",
    "agg_n": 0,
    "dur": "976:08",
