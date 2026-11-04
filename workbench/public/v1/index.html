@@ -726,6 +726,41 @@ button.stp-h:hover{background:var(--hov)}
 .prop-act input{flex:1;min-width:180px;padding:7px 10px;border:1px solid var(--ln);border-radius:var(--r-ctl);background:var(--s1);color:var(--t1);font:inherit;font-size:13px}
 .prop-act .opt[disabled]{opacity:.45;cursor:not-allowed}
 .prop-note{font-size:12px;color:var(--t3)}
+/* R4：设置 sheet（贴右侧）+ 开关 + 投递三态 */
+#settings{align-items:stretch;justify-content:flex-end;padding-top:0}
+#settings .set-sheet{width:min(380px,96vw);max-height:none;height:100%;border-radius:0;border-right:0;display:flex;flex-direction:column}
+#settings .hp-body{flex:1;overflow:auto}
+.set-row2{display:flex;align-items:flex-start;gap:12px;padding:4px 0 2px}
+.set-txt{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px}
+.set-txt b{color:var(--t1);font-weight:var(--w-md);font-size:13px}
+.set-sub{color:var(--t3);font-size:12px;line-height:1.5}
+.set-note{margin:6px 0 2px;font-size:12px;color:var(--t2);min-height:16px}
+.set-sec{margin:16px 0 6px;font-size:12px;color:var(--t3)}
+.set-kv{display:flex;justify-content:space-between;gap:10px;padding:8px 10px;border:1px solid var(--ln);border-radius:var(--r-ctl);background:var(--s2);font-size:12.5px}
+.set-kv span{color:var(--t3);font-family:var(--f-mono);font-size:11.5px}
+.set-kv b{color:var(--t1);font-variant-numeric:tabular-nums}
+.set-list{display:flex;flex-direction:column;gap:6px}
+.set-item{display:flex;align-items:center;gap:8px;padding:7px 10px;border:1px solid var(--ln);border-radius:var(--r-ctl);background:var(--s2);font-size:12.5px}
+.set-item .mono{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;font-family:var(--f-mono);font-size:12px;color:var(--t1)}
+.set-foot{margin-top:auto;padding-top:16px;font-size:11.5px;color:var(--t3)}
+.sw{position:relative;display:inline-flex;align-items:center;cursor:pointer;flex:none}
+.sw input{position:absolute;opacity:0;width:0;height:0}
+.sw-t{width:38px;height:22px;border-radius:999px;background:var(--s3);border:1px solid var(--ln);display:inline-block;position:relative;transition:background .15s,border-color .15s}
+.sw-t i{position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:var(--t3);transition:transform .15s,background .15s}
+.sw input:checked + .sw-t{background:var(--accent-soft);border-color:var(--accent)}
+.sw input:checked + .sw-t i{transform:translateX(16px);background:var(--accent)}
+.sw input:disabled + .sw-t{opacity:.5;cursor:not-allowed}
+.sw input:focus-visible + .sw-t{outline:2px solid var(--accent);outline-offset:2px}
+.deliv{display:flex;gap:4px;padding:0 0 8px;flex-wrap:wrap}
+.deliv[hidden]{display:none}
+.dseg{padding:4px 9px;border:1px solid var(--ln);border-radius:999px;font-size:12px;color:var(--t3);background:var(--s1)}
+.dseg:hover:not([disabled]){color:var(--t1);border-color:var(--ln-hi)}
+.dseg.on{color:var(--t1);border-color:var(--accent);background:var(--accent-soft)}
+.dseg[disabled]{opacity:.45;cursor:not-allowed}
+.planc{border:1px solid var(--ln);border-radius:var(--r-card);background:var(--s2);padding:12px 14px;margin:10px 0 2px}
+.planc-t{margin:6px 0 0;white-space:pre-wrap;font-family:var(--f-serif);font-size:14.5px;line-height:1.7;color:var(--t1);max-height:340px;overflow:auto}
+.planc-f{display:flex;align-items:center;gap:10px;margin-top:12px;padding-top:10px;border-top:1px solid var(--ln);flex-wrap:wrap}
+.planc-h{font-size:12px;color:var(--t3)}
 </style>
 </head>
 <body>
@@ -764,6 +799,9 @@ button.stp-h:hover{background:var(--hov)}
         <button class="vb-btn" id="vbBtn" title="信息密度：详细 = 组头 + 每条单行；紧凑 = 只留结论 + 一行统计">详细</button>
         <button class="vb-btn" id="palBtn" title="命令面板（Ctrl/Cmd+K）">命令</button>
         <button class="vb-btn" id="diagBtn" title="健康检查与诊断包（daemon 心跳 / runs / 磁盘 / 最近错误）">诊断</button>
+        <button class="icon-btn" id="setBtn" aria-label="设置" title="设置（Ctrl+,）">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1 1.55V21a2 2 0 1 1-4 0v-.09a1.7 1.7 0 0 0-1.11-1.55 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.55-1H3a2 2 0 1 1 0-4h.09a1.7 1.7 0 0 0 1.55-1.11 1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.7 1.7 0 0 0 1.87.34H9a1.7 1.7 0 0 0 1-1.55V3a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1 1.55 1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.87V9a1.7 1.7 0 0 0 1.55 1H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.55 1Z"/></svg>
+        </button>
         <button class="icon-btn" id="themeBtn" aria-label="切换主题">
           <svg class="i-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
           <svg class="i-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z"/></svg>
@@ -781,6 +819,12 @@ button.stp-h:hover{background:var(--hov)}
 
     <div class="composer-zone">
       <div class="composer">
+        <!-- R4：投递三态（只对"回复等待中的节点"出现；steer 置灰） -->
+        <div class="deliv" id="deliv" hidden role="group" aria-label="投递方式">
+          <button class="dseg on" data-m="queue" title="下一轮生效：写 reply.txt，节点下次拉起时带入">下一轮生效</button>
+          <button class="dseg" data-m="interrupt" title="打断重来：把话送进 spec.reply 并掐掉当前 worker，立刻重拉">打断重来</button>
+          <button class="dseg" data-m="steer" disabled title="当前版本不支持真插话，需 pi RPC">插话</button>
+        </div>
         <div class="c-input">
           <textarea id="cText" rows="1" placeholder="派发任务，或回复等待中的问题…"></textarea>
           <button class="send" id="sendBtn" aria-label="发送">
@@ -917,6 +961,7 @@ function syncComposer(){
   var el = $("#cText"), btn = $("#sendBtn");
   if(el) el.placeholder = ap ? "回复 = 拒绝并说明原因（不会作为新消息发出）" : "派发任务，或回复等待中的问题…";
   if(btn) btn.classList.toggle("danger", !!ap);
+  paintDeliv();                 /* R4：有等待中的节点才露出投递三态 */
 }
 function startPoll(){ if(!pollTimer) pollTimer = setInterval(fetchView, 5000); }
 function stopPoll(){ if(pollTimer){ clearInterval(pollTimer); pollTimer = null; } }
@@ -1196,8 +1241,8 @@ function renderRun(silent){
   var h = "";
   /* ① 用户消息：只有它带来"标题没说过的话"时才渲染（P3 一条信息只出现一次） */
   if(showUserBubble(r)) h += '<div class="urow"><div class="ububble">'+esc(r.req)+'</div></div>';
-  /* ② 结论：结论优先于过程（P4）；没有结论时不占位 */
-  if(r.sum) h += conclHtml(r);
+  /* ② 结论：结论优先于过程（P4）；没有结论时不占位。R4：plan 档的 summary 换成「计划（只读）」卡 */
+  if(r.sum) h += (String(r.profile||"") === "plan" ? planCardHtml(r) : conclHtml(r));
   /* ③ 验收条：一行折叠条，点开才是 accept 清单 + 子代理 DAG（P3） */
   h += aclStripHtml(r);
   /* S23：计划条（过程组上方一行；当前项高亮，点开看全量） */
@@ -1218,6 +1263,9 @@ function renderRun(silent){
   bindAcl();
   bindGroup();
   bindPlan();
+  /* R4：计划卡的「按此计划执行」 */
+  var pe = $("#planExec");
+  if(pe) pe.addEventListener("click", function(){ execPlan(r); });
   bindTreeRows();
   bindStepRows("#threadScroll", r.id, "root");
   bindDiffs("#threadScroll");
@@ -2016,6 +2064,13 @@ $("#sendBtn").addEventListener("click",function(){
     return;
   }
   if(!v){ cText.focus(); return; }
+  /* R4：回复等待中的节点 → 走投递三态（queue 写 reply.txt；interrupt 掐 worker 立刻重来） */
+  var rep = pendingReplyForComposer();
+  if(rep){
+    cText.value = ""; cText.style.height = "";
+    sendReply(rep, v, delivMode());
+    return;
+  }
   var ci = $("#colInner");
   var div = document.createElement("div");
   div.className = "urow";
@@ -2338,8 +2393,8 @@ function isTyping(e){
   return !!t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable);
 }
 function layerOpen(){
-  var sheet = $("#sheet"), hp = $("#health");
-  return palOpen || (hp && !hp.hidden) || (sheet && !sheet.hidden);
+  var sheet = $("#sheet"), hp = $("#health"), st = $("#settings");
+  return palOpen || (hp && !hp.hidden) || (st && !st.hidden) || (sheet && !sheet.hidden);
 }
 document.addEventListener("keydown", function(e){
   var mod = e.ctrlKey || e.metaKey;
@@ -2348,8 +2403,16 @@ document.addEventListener("keydown", function(e){
     if(palOpen) closePalette(); else openPalette($("#palBtn"));
     return;
   }
+  if(mod && e.key === ","){                 /* R4：Ctrl+, 开设置 */
+    e.preventDefault();
+    var st0 = $("#settings");
+    if(st0 && !st0.hidden) closeSettings(); else openSettings($("#setBtn"));
+    return;
+  }
   if(e.key === "Escape"){
     if(palOpen){ e.preventDefault(); closePalette(); return; }
+    var st1 = $("#settings");
+    if(st1 && !st1.hidden){ e.preventDefault(); closeSettings(); return; }  /* 关层不保存 */
     var pp = $("#prop");
     if(pp && !pp.hidden){ e.preventDefault(); closeProp(); return; }   /* 关层 ≠ 应用/拒绝 */
     var hp = $("#health");
@@ -2387,6 +2450,8 @@ function bindChrome(){
     });
   }
   bindPropUi();
+  bindSettingsUi();
+  bindDelivUi();
 }
 /* ================= R3：子代理页签的行（path / 状态点 / 目标 / 耗时） ================= */
 function subRowHtml(k){
@@ -2533,6 +2598,162 @@ function bindPropUi(){
   var ov = $("#prop"); if(ov) ov.addEventListener("click", function(e){ if(e.target === this) closeProp(); });
 }
 
+/* ================= R4：设置面板（右栏 sheet） ================= */
+var SET = { ready:false, missing:false, auto_apply_low:false };
+function openSettings(trigger){
+  var el = $("#settings"); if(!el) return;
+  el.hidden = false;
+  if(trigger) el.dataset.trigger = "y";
+  renderSettings();
+}
+function closeSettings(){
+  var el = $("#settings"); if(!el || el.hidden) return;
+  el.hidden = true;                       /* 关层不保存：开关本身是改完即提交，没有待存的草稿 */
+  try{ var b = $("#setBtn"); if(b) b.focus(); }catch(e){}
+}
+function renderSettings(){
+  var sw = $("#setAutoLow"), note = $("#setAutoNote");
+  if(sw){ sw.checked = !!SET.auto_apply_low; sw.disabled = true; }
+  if(note) note.textContent = "读取中…";
+  fetch("/api/settings").then(function(r){ return r.json().then(function(d){ return {s:r.status, d:d}; }); })
+    .then(function(x){
+      if(x.s === 501){
+        SET.missing = true;
+        if(sw) sw.disabled = true;
+        if(note) note.textContent = "设置接口未就绪（src/settings.ts 还没导出）—— 开关暂不可用，其余项照常可看";
+        return;
+      }
+      if(!x.d || !x.d.ok){
+        if(note) note.textContent = "读取失败：" + ((x.d && (x.d.error||x.d.hint)) || ("HTTP "+x.s));
+        return;
+      }
+      var s = x.d.settings || {};
+      SET = { ready:true, missing:false, auto_apply_low: !!s.auto_apply_low };
+      if(sw){ sw.checked = SET.auto_apply_low; sw.disabled = false; }
+      if(note) note.textContent = SET.auto_apply_low ? "已开启：只对 risk=low 生效" : "已关闭：提案都会进「需要你」";
+    })
+    .catch(function(e){ if(note) note.textContent = "读取失败：" + String(e).slice(0, 60); });
+
+  /* 并发上限：只读，取当前 run 的 run.json.parallel */
+  var r = RUNS[currentRun] || {};
+  var par = $("#setPar");
+  if(par) par.textContent = typeof r.parallel === "number" ? String(r.parallel) : "默认";
+
+  /* 最近自动应用 */
+  var dock = $("#setApplied");
+  if(dock) dock.innerHTML = '<div class="set-sub">读取中…</div>';
+  fetch("/api/proposals?status=applied&auto=1").then(function(r2){ return r2.json(); }).then(function(d){
+    if(!dock) return;
+    var list = (d && d.proposals) || [];
+    dock.innerHTML = list.length ? list.slice(0, 8).map(function(p){
+      return '<div class="set-item"><span class="mono">'+esc(p.slug)+'</span>'+
+             '<span class="risk risk-'+esc(String(p.risk||"low"))+'">'+esc(String(p.risk||"low"))+'</span></div>';
+    }).join("") : '<div class="set-sub">还没有自动应用记录（开启开关后，risk=low 的提案会出现在这里）</div>';
+  }).catch(function(){ if(dock) dock.innerHTML = '<div class="set-sub">读取失败</div>'; });
+}
+function setAutoLow(on){
+  var sw = $("#setAutoLow"), note = $("#setAutoNote");
+  if(sw) sw.disabled = true;
+  if(note) note.textContent = "保存中…";
+  fetch("/api/settings", {method:"POST", headers:{"content-type":"application/json"},
+    body: JSON.stringify({ auto_apply_low: !!on })})
+    .then(function(r){ return r.json().then(function(d){ return {s:r.status, d:d}; }); })
+    .then(function(x){
+      if(x.s === 501){ if(note) note.textContent = "设置接口未就绪"; if(sw){ sw.checked = !on; sw.disabled = true; } return; }
+      if(!x.d || !x.d.ok){
+        if(note) note.textContent = "保存失败：" + ((x.d && x.d.error) || ("HTTP "+x.s));
+        if(sw){ sw.checked = !on; sw.disabled = false; }
+        toast("保存失败");
+        return;
+      }
+      var s = x.d.settings || {};
+      SET.auto_apply_low = !!s.auto_apply_low;
+      if(sw){ sw.checked = SET.auto_apply_low; sw.disabled = false; }
+      if(note) note.textContent = SET.auto_apply_low ? "已保存：开启（只对 risk=low 生效）" : "已保存：关闭";
+      toast(SET.auto_apply_low ? "已开启低风险自动应用" : "已关闭低风险自动应用");
+    })
+    .catch(function(e){
+      if(note) note.textContent = "保存失败：" + String(e).slice(0, 60);
+      if(sw){ sw.checked = !on; sw.disabled = false; }
+      toast("保存失败");
+    });
+}
+function bindSettingsUi(){
+  var btn = $("#setBtn"); if(btn) btn.addEventListener("click", function(){ openSettings(this); });
+  var cl = $("#setClose"); if(cl) cl.addEventListener("click", closeSettings);
+  var box = $("#settings"); if(box) box.addEventListener("click", function(e){ if(e.target === this) closeSettings(); });
+  var sw = $("#setAutoLow"); if(sw) sw.addEventListener("change", function(){ setAutoLow(this.checked); });
+}
+
+/* ================= R4：计划卡（plan 档节点的 summary → 只读计划 + 按此执行） ================= */
+function planCardHtml(r){
+  return '<div class="planc" id="planCard">'+
+    '<div class="concl-k">计划（只读）</div>'+
+    '<pre class="planc-t">'+esc(r.sum)+'</pre>'+
+    '<div class="planc-f">'+
+      '<button class="opt solid" id="planExec">按此计划执行</button>'+
+      '<span class="planc-h">会以 worker 档执行，预算沿用默认</span>'+
+    '</div></div>';
+}
+function execPlan(r){
+  if(!r || !r.sum) return;
+  var btn = $("#planExec"); if(btn) btn.disabled = true;
+  fetch("/api/tasks", {method:"POST", headers:{"content-type":"application/json"},
+    body: JSON.stringify({ goal: r.sum, kind: "task", agent: "pi", profile: "worker" })})
+    .then(function(x){ if(!x.ok) throw new Error("HTTP "+x.status); return x.json(); })
+    .then(function(d){
+      if(d && d.root_id) pendingSelectId = d.root_id;
+      toast("已按计划派发（worker 档）");
+      scheduleFetch();
+    })
+    .catch(function(e){ toast("派发失败：" + String(e).slice(0, 60)); if(btn) btn.disabled = false; });
+}
+
+/* ================= R4：投递三态（queue / interrupt / steer-置灰） ================= */
+function pendingReplyForComposer(){
+  var r = RUNS[currentRun]; if(!r) return null;
+  var t = r.tree || [];
+  for(var i=0;i<t.length;i++){
+    var n = t[i];
+    if(n && (n.st === "input" || n.st === "waiting" || n.st === "blocked")) return { run:r.id, path:n.path, nm:n.nm };
+  }
+  if(r.status === "input") return { run:r.id, path:(t[0] && t[0].path) || "root", nm:r.title || "root" };
+  return null;
+}
+function delivKey(){ var r = RUNS[currentRun]; return "aica-v1-deliv:" + (r ? r.id : "-"); }
+function delivMode(){
+  try{ var v = localStorage.getItem(delivKey()); return (v === "interrupt") ? "interrupt" : "queue"; }catch(e){ return "queue"; }
+}
+function setDelivMode(m){
+  if(m !== "queue" && m !== "interrupt") return;   /* steer 不落盘：不支持 */
+  try{ localStorage.setItem(delivKey(), m); }catch(e){}
+  paintDeliv();
+}
+function paintDeliv(){
+  var m = delivMode();
+  each(".dseg", function(el){ el.classList.toggle("on", el.dataset.m === m); });
+  var wrap = $("#deliv");
+  if(wrap) wrap.hidden = !pendingReplyForComposer();   /* 只有"回复等待中的节点"才出现 */
+}
+function bindDelivUi(){
+  each(".dseg", function(el){
+    if(el.dataset.m === "steer") return;               /* 置灰项不绑 */
+    el.addEventListener("click", function(){ setDelivMode(el.dataset.m); });
+  });
+}
+function sendReply(rep, text, mode){
+  fetch("/api/runs/"+encodeURIComponent(rep.run)+"/node/"+encPath(rep.path)+"/reply",
+    {method:"POST", headers:{"content-type":"application/json"},
+     body: JSON.stringify({ text:text, mode:mode })})
+    .then(function(r){ return r.json().then(function(d){ return {s:r.status, d:d}; }); })
+    .then(function(x){
+      if(!x.d || !x.d.ok){ toast("回复失败：" + ((x.d && x.d.error) || ("HTTP "+x.s))); return; }
+      toast(mode === "interrupt" ? "已打断并重来" : "已送达，下一轮生效");
+      scheduleFetch();
+    })
+    .catch(function(e){ toast("回复失败：" + String(e).slice(0, 60)); });
+}
+
 if(document.readyState === "loading") document.addEventListener("DOMContentLoaded", bindChrome);
 else bindChrome();
 
@@ -2566,6 +2787,34 @@ else bindChrome();
       <button class="opt" id="propClose">关闭</button>
     </header>
     <div class="hp-body" id="propBody"></div>
+  </div>
+</div>
+
+<!-- ================= R4：设置（右栏 sheet） ================= -->
+<div class="ov" id="settings" hidden>
+  <div class="hp set-sheet" role="dialog" aria-modal="true" aria-label="设置">
+    <header><b>设置</b><span class="hp-time">本机 · 只影响这个 STATE</span>
+      <button class="opt" id="setClose">关闭</button>
+    </header>
+    <div class="hp-body">
+      <div class="set-row2">
+        <div class="set-txt"><b>低风险提案自动应用</b>
+          <span class="set-sub">risk=low 的提案由 daemon 直接应用，不再占「需要你」</span></div>
+        <label class="sw" title="低风险提案自动应用">
+          <input type="checkbox" id="setAutoLow" aria-label="低风险提案自动应用"><span class="sw-t"><i></i></span>
+        </label>
+      </div>
+      <div class="set-note" id="setAutoNote">读取中…</div>
+
+      <div class="set-sec">并发上限</div>
+      <div class="set-kv"><span>run.json.parallel</span><b id="setPar">—</b></div>
+      <div class="set-sub">只读：由派发时的 run 决定；没写就是默认并发。</div>
+
+      <div class="set-sec">最近自动应用</div>
+      <div class="set-list" id="setApplied"><div class="set-sub">读取中…</div></div>
+
+      <div class="set-foot">Esc 关闭（未提交的改动不保存）· Ctrl+, 再次打开</div>
+    </div>
   </div>
 </div>
 

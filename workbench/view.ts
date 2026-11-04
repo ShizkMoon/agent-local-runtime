@@ -309,6 +309,10 @@ export interface RunView {
   sev: Severity | null;
   /** S26：本 run 的审批审计对（可点开） */
   audits: AuditView[];
+  /** R4：根节点 spec.profile（plan → 中栏渲染「计划（只读）」卡） */
+  profile: string | null;
+  /** R4：run.json.parallel（设置面板只读展示并发上限；缺省 null） */
+  parallel: number | null;
 }
 
 export interface InboxItem {
@@ -1382,6 +1386,8 @@ function buildRunPart(runsDir: string, rootId: string, meta: any, now: number, s
       req: meta?.subject ?? "",                                          // 原始诉求
       obj: String(rootNode?.spec?.goal ?? "").split("\n")[0].slice(0, 80), // 目标（根 goal 首行）
       sum: rootNode?.r?.summary ?? "",                                   // 摘要（根 result）
+      profile: typeof rootNode?.spec?.profile === "string" ? rootNode.spec.profile : null,
+      parallel: typeof meta?.parallel === "number" ? meta.parallel : null,
       chips, tree, arts,
       steps: rootSteps,                                                  // S17：Run 详情工具时间线
       groups: groupSteps(rootSteps),                                     // S25：渲染分段（时间顺序）
@@ -1488,6 +1494,35 @@ export function proposalDetail(dir: string): ProposalDetail | null {
 export function mergeProposal(detail: ProposalDetail | null, hit: any): any | null {
   if (!detail) return null;
   return { ...detail, ...(hit && typeof hit === "object" ? hit : {}) };
+}
+
+/**
+ * R4：提案列表的查询过滤（`/api/proposals?status=applied&auto=1`）。
+ * 过滤规则只在这里定义，server 与测试共用 —— "自动应用"标记容忍几种常见命名。
+ */
+export function filterProposals(list: any[], q: { status?: string | null; auto?: string | null } = {}): any[] {
+  if (!Array.isArray(list)) return [];
+  const st = String(q.status ?? "").trim().toLowerCase();
+  const wantAuto = String(q.auto ?? "").trim() === "1";
+  return list.filter(p => {
+    if (st && String(p?.status ?? "").toLowerCase() !== st) return false;
+    if (wantAuto && !isAutoApplied(p)) return false;
+    return true;
+  });
+}
+
+/** 自动应用的判定：列表项自带标记优先，否则看提案目录的 applied.json / meta.json（S28 落盘是权威） */
+function isAutoApplied(p: any): boolean {
+  if (p?.auto === true || p?.applied_by === "auto" || p?.by === "auto") return true;
+  const dir = typeof p?.dir === "string" ? p.dir : "";
+  if (!dir) return false;
+  try {
+    const ap = readJson<any>(join(dir, "applied.json"));
+    if (ap && (ap.by === "auto" || ap.auto === true)) return true;
+    const meta = readJson<any>(join(dir, "meta.json"));
+    if (meta?.auto === true) return true;
+  } catch { /* 目录读不到就当不是自动应用 */ }
+  return false;
 }
 
 

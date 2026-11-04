@@ -14,6 +14,8 @@
    "req": "smoke-tools",
    "obj": "Call the agent_desktop tool exactly once with argv [\"list-apps\"]. The tool outpu",
    "sum": "agent_desktop list-apps 返回 4 个运行中应用（Weixin.exe、WindowsTerminal.exe、ego.exe、msedge.exe），原始输出见 artifacts/ad-fa7cd7db.txt",
+   "profile": null,
+   "parallel": null,
    "chips": [
     [
      "pending",

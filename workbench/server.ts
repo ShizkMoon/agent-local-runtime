@@ -9,7 +9,7 @@ import { join, normalize, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFile, execFileSync, spawn, type ChildProcess } from "node:child_process";
 // S16：视图投影住在 view.ts（纯函数，runsDir 由参数传入）；本文件只做 HTTP 胶水
-import { buildView, okId, badSeg, readJson, safeJoinIn, nodePaths, nodeStatus, evHint, runPulse, viewCacheStats, clearViewCache, approvalState, proposalDetail, mergeProposal } from "./view.ts";
+import { buildView, okId, badSeg, readJson, safeJoinIn, nodePaths, nodeStatus, evHint, runPulse, viewCacheStats, clearViewCache, approvalState, proposalDetail, mergeProposal, filterProposals } from "./view.ts";
 import { arEnv, spawnDaemon } from "./spawn.ts";
 // S19：审批决策闭集由 gate.ts 持有（唯一真相），桥只做校验与落盘
 import { GATE_DECISIONS } from "../aica-pi/extensions/gate.ts";
@@ -350,11 +350,55 @@ function readBody(req: any, cap = 64 * 1024): Promise<string> {
   });
 }
 
-async function apiProposalsList(res: any): Promise<void> {
+async function apiProposalsList(res: any, status?: string | null, auto?: string | null): Promise<void> {
   const mod = await proposalsApi();
   if (!mod || typeof mod.listProposals !== "function") return notReady(res);
-  try { json(res, 200, { ok: true, proposals: await mod.listProposals() }); }
+  try {
+    const list = (await mod.listProposals()) || [];
+    json(res, 200, { ok: true, proposals: filterProposals(list, { status, auto }) });
+  } catch (e) { json(res, 500, { ok: false, error: String(e).slice(0, 300) }); }
+}
+
+// ---------------------------------------------------------------- R4：settings 路由（模块由 impl-approval 提供）
+
+let settingsMod: any;
+async function settingsApi(): Promise<any | null> {
+  if (settingsMod !== undefined) return settingsMod;
+  try { settingsMod = await import("../src/settings.ts"); } catch { settingsMod = null; }
+  return settingsMod;
+}
+/** 在模块（含 default 导出）里找第一个同名函数 —— 兼容 impl-approval 的命名 */
+function pickFn(mod: any, names: string[]): ((...a: any[]) => any) | null {
+  if (!mod) return null;
+  for (const n of names) if (typeof mod[n] === "function") return mod[n].bind(mod);
+  const d = mod.default;
+  if (d && typeof d === "object") for (const n of names) if (typeof d[n] === "function") return d[n].bind(d);
+  return null;
+}
+function settingsNotReady(res: any): void {
+  json(res, 501, { ok: false, error: "settings 未就绪", hint: "src/settings.ts 还没有导出 readSettings/writeSettings" });
+}
+async function apiSettingsGet(res: any): Promise<void> {
+  const read = pickFn(await settingsApi(), ["readSettings", "getSettings", "loadSettings"]);
+  if (!read) return settingsNotReady(res);
+  try { json(res, 200, { ok: true, settings: (await read()) ?? {} }); }
   catch (e) { json(res, 500, { ok: false, error: String(e).slice(0, 300) }); }
+}
+async function apiSettingsPost(req: any, res: any): Promise<void> {
+  const write = pickFn(await settingsApi(), ["writeSettings", "setSettings", "updateSettings", "saveSettings"]);
+  if (!write) return settingsNotReady(res);
+  let body: any = {};
+  try { body = JSON.parse((await readBody(req)) || "{}"); } catch { return err(res, 400, "bad json"); }
+  const patch: any = {};
+  if ("auto_apply_low" in body) {
+    if (typeof body.auto_apply_low !== "boolean") return err(res, 400, "auto_apply_low 必须是布尔");
+    patch.auto_apply_low = body.auto_apply_low;
+  }
+  if (!Object.keys(patch).length) return err(res, 400, "nothing to update");
+  try {
+    const out = await write(patch);
+    json(res, 200, { ok: true, settings: out ?? patch });
+  } catch (e) { json(res, 500, { ok: false, error: String(e).slice(0, 300) }); }
 }
 
 /** GET /api/proposals/:slug → 列表项 + proposal.md / change.patch / verify.json 正文（R3 提案页签） */
@@ -676,7 +720,9 @@ const server = createServer((req, res) => {
     if (req.method === "GET" && p === "/api/daemon") return apiDaemon(res);
     if (req.method === "GET" && p === "/api/health") return apiHealth(res);
     if (req.method === "GET" && p === "/api/diag") return apiDiag(res, url.searchParams.get("run"));
-    if (req.method === "GET" && p === "/api/proposals") return void apiProposalsList(res);
+    if (req.method === "GET" && p === "/api/proposals") return void apiProposalsList(res, url.searchParams.get("status"), url.searchParams.get("auto"));
+    if (req.method === "GET" && p === "/api/settings") return void apiSettingsGet(res);
+    if (req.method === "POST" && p === "/api/settings") return void apiSettingsPost(req, res);
     if (req.method === "GET" && (p.match(/^\/api\/proposals\/([^/]+)$/) as RegExpMatchArray | null)) {
       const g = p.match(/^\/api\/proposals\/([^/]+)$/)!;
       const slug = decodeURIComponent(g[1]);
@@ -758,6 +804,7 @@ const server = createServer((req, res) => {
 });
 
 server.listen(PORT, HOST, () => console.log(`[workbench] http://${HOST}:${PORT}  runs=${RUNS}`));
+
 
 
 

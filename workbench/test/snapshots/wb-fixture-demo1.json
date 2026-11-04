@@ -14,6 +14,8 @@
    "req": "workbench 冒烟夹具",
    "obj": "收集 aica runtime 文档并给出执行摘要",
    "sum": "拆分为 fetch / summarize 两个子节点",
+   "profile": "orchestrator",
+   "parallel": null,
    "chips": [
     [
      "pending",
