@@ -307,11 +307,11 @@ TUI 的 session 屏是四块：
 
 分组路径由 `partPath(part, verbosity)` 决定：`question` 永不分组；reasoning → `reasoning`；read/glob/grep/webfetch/websearch → `exploration`；低档再加 `activity` 外层（`grouping/session.ts:85-91`）。instruction 加载的消息单独成组（`messagePath`，`:94-97`）。
 
-**→ 我们怎么改**：`workbench/server.ts:250-278` 的 `steps` 现在是「尾 12 条平铺」；把它改成「服务端投影出行」：
-- 给每条 step 加 `group: "activity"|"reasoning"|"exploration"|"instructions"|null` 与 `status: "streaming"|"running"|"completed"|"error"|"deny"`；
-- 同一 `group` 连续合并，前端可折叠；`deny`/`gate` 行固定显眼；
+**→ 我们怎么改**：`workbench/view.ts:359-460` 的 `buildSteps` 已经按 `call_id` 合并 start/end、给出 `st: ok|err|run|lost`，但仍是**平铺列表**；在它上面加一层分组投影：
+- 每条 step 加 `group: "activity"|"reasoning"|"exploration"|"instructions"|null`（由 `kind/name` 推导）；
+- 同一 `group` 连续合并，前端可折叠；`st==="err"` 或 `gate` 行固定显眼；
 - 默认 medium，UI 提供 low/high 切换；
-- `cur` 用「Running <tool>…」稳定文案，而不是原始事件名（现在 `cur` 是 `ev?.data?.tool ?? ev?.kind`，`server.ts:271`）。
+- `cur` 用「Running <tool>…」稳定文案，而不是原始事件名（现在 `cur` 是 `ev?.data?.tool ?? ev?.kind`，`view.ts:565`）。
 
 ### 4.3 快捷键（只列高频）
 
@@ -396,18 +396,18 @@ leader 默认 `ctrl+x`（`keybind.ts:41`）。以下均来自 `keybind.ts`：
 **A6 工具状态机与 assistant 内容投影（streaming/running/completed/error + call_id）** — ★R1（S2 缺口）
 - 机制：assistant `content[]` 内联 tool，tool `state` 四态；事件 `session.tool.called/progress/success/failed`、`session.text.delta`、`session.step.*` 都是 durable，投影到同一 message（`schema/session-event.ts:335-570`；`message-updater.ts:33-60`）。
 - 为什么：我们的 `events.jsonl` 目前 `tool_execution` 只有 start/end，`message_update` 被 `SKIP`（`src/transcribe.ts:14`），所以 UI 只能看到「做完的工具」，看不到「正在跑/流式文本」。
-- 落点：`transcribe.ts:52-101`：去掉对 `message_update` 的全量 SKIP，按 200ms/≥500 字符聚批发 `agent_delta`；`tool_execution_update` 发 `tool_update`；`tool_execution_start/end` 保留；`apiView.steps` 按 `call_id` 折叠（同 id 只留最新）。
+- 落点：`transcribe.ts:52-101`：去掉对 `message_update` 的全量 SKIP，按 200ms/≥500 字符聚批发 `agent_delta`；`tool_execution_update` 发 `tool_update`；`tool_execution_start/end` 保留；`view.ts` 侧沿用现有 `call_id` 合并（`buildSteps`，`view.ts:359-460`），只补 `streaming` 状态。
 - 验收：运行 3 分钟任务，`events.jsonl` 在运行中出现 `agent_delta`/`tool_update`，UI 能看到流式文本；工具结束后同 `call_id` 折叠为一行。
 
 **A7 分组/verbosity 投影（activity/reasoning/exploration/instructions + low/medium/high）** — ★R1.5
 - 机制：见 §4.2；默认 medium，低档只显示统计摘要，running 行稳定文案，被权限挡的行固定组外（`tui/src/routes/session/grouping/session.ts:30-135`，`activity-summary.ts:22-95`）。
-- 为什么：我们的 steps 平铺且只取尾 12 条（`server.ts:250-278`），长任务里用户看不到「整体在干什么」；分组是纯投影，不改事件格式。
-- 落点：`server.ts` 的 `steps` 生成加 `group`/`status`；`public/v1/index.html` 的 `stepHtml` 支持折叠组与计数标签；`verbosity` 存 localStorage。
+- 为什么：我们的 `buildSteps` 已是按 `call_id` 合并的平铺列表（`view.ts:359-460`），但没有分组/折叠，长任务里用户看不到「整体在干什么」；分组是纯投影，不改事件格式。
+- 落点：`view.ts` 的 `StepView` 加 `group`/`collapsed`（复用现有 `st`），`buildView` 输出分组摘要；`public/v1/index.html` 的 `stepHtml` 支持折叠组与计数标签；`verbosity` 存 localStorage。
 
 **A8 队列 vs steer 的诚实语义** — ★R1.5
 - 机制：inbox 的 `delivery: steer|queue`；steer 在 step 边界优先消费，queue 只在空闲边界消费一条；运行中不能真正插入文本（`core/src/session/inbox.ts:53-57,567-586`）。
-- 为什么：我们的 `reply` 对 running 节点只写 `spec.reply`（`server.ts:442-467` 注释自己写「注入 spec.reply，worker 上下文可见」——但**当前进程看不到**）。这是 PRD G11 的准确缺口。
-- 落点：reply API 加 `mode: "queue"|"interrupt"`：queue = 写 `spec.reply` + `reply-queued` 事件，等 worker 下次拉起；interrupt = 复用 `abort`（`server.ts:506-519`）→ 写 reply → `ensureDaemon()` 重拉。UI 两个按钮，按钮文案明确「本轮结束后生效」/「中断并继续」。
+- 为什么：我们的 `reply` 对 running 节点只写 `spec.reply`（`server.ts:229-256` 注释自己写「注入 spec.reply，worker 上下文可见」——但**当前进程看不到**）。这是 PRD G11 的准确缺口。
+- 落点：reply API 加 `mode: "queue"|"interrupt"`：queue = 写 `spec.reply` + `reply-queued` 事件，等 worker 下次拉起；interrupt = 复用 `abort`（`server.ts:294-306`）→ 写 reply → `ensureDaemon()` 重拉。UI 两个按钮，按钮文案明确「本轮结束后生效」/「中断并继续」。
 - 验收：running 节点点「排队」→ worker 当前轮不变，下一次拉起 `userMessage` 出现该回复；点「中断并继续」→ 进程被杀、result=failed(aborted)、随后以 reply 重启。
 
 ### 运行与恢复
@@ -459,7 +459,7 @@ leader 默认 `ctrl+x`（`keybind.ts:41`）。以下均来自 `keybind.ts`：
 
 **A16 服务/SSE 的可靠性语义（只抄语义）** — R2
 - 机制：SSE 明确 volatile、慢消费者 fail、`server.connected` 重放给新订阅者、HTTP GET 才是可靠状态源（`protocol/groups/event.ts:72-80`，`client/src/shared-events.ts:33-52`）。
-- 落点：`workbench/server.ts:521-546` 的 SSE 加 `server.connected` 首帧与 per-client 队列上限；前端收到溢出/断线就重拉 `apiView`。**不抄后台服务/鉴权/HMAC**。
+- 落点：`workbench/server.ts:309-333` 的 SSE 加 `server.connected` 首帧与 per-client 队列上限；前端收到溢出/断线就重拉 `apiView`。**不抄后台服务/鉴权/HMAC**。
 
 **A17 测试策略与事件级断言** — ★R1
 - 机制：不 mock、测真实实现、包内跑测试、根目录守卫、CI 双平台、生成物校验（`AGENTS.md:183-195`，`.github/workflows/check-test.yml:79-160`）。
