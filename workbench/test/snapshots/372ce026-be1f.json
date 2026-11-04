@@ -92,7 +92,11 @@
     "reason": "agent_desktop list-apps 返回 4 个运行中应用（Weixin.exe、WindowsTerminal.exe、ego.exe、msedge.exe），原始输出见 artifacts/ad-fa7cd7db.txt",
     "code": 0
    },
-   "compactions": []
+   "compactions": [],
+   "diffs": [],
+   "plan": null,
+   "sev": null,
+   "audits": []
   }
  ],
  "inbox": [],

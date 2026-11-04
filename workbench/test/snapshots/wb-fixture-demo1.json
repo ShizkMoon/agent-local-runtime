@@ -102,7 +102,11 @@
       "code": 0
      },
      "agg": "done",
-     "compactions": []
+     "compactions": [],
+     "diffs": [],
+     "plan": null,
+     "sev": null,
+     "audits": []
     },
     {
      "l": 2,
@@ -127,7 +131,20 @@
       "code": -1
      },
      "agg": "failed",
-     "compactions": []
+     "compactions": [],
+     "diffs": [],
+     "plan": null,
+     "sev": null,
+     "audits": [
+      {
+       "node": "root/review",
+       "asked_at": "2026-11-03T08:08:49.642Z",
+       "question": "汇总口径：按模块还是按接口？",
+       "decision": null,
+       "decided_at": null,
+       "ms": null
+      }
+     ]
     },
     {
      "l": 2,
@@ -171,7 +188,20 @@
       "code": 1
      },
      "agg": "failed",
-     "compactions": []
+     "compactions": [],
+     "diffs": [],
+     "plan": null,
+     "sev": null,
+     "audits": [
+      {
+       "node": "root/summarize",
+       "asked_at": "2026-11-03T08:08:19.642Z",
+       "question": "缺少输入文件，是否改用 refs 直接读取？",
+       "decision": null,
+       "decided_at": null,
+       "ms": null
+      }
+     ]
     }
    ],
    "arts": [
@@ -195,7 +225,28 @@
     "reason": "Worker 异常退出（code -1）：Error: spawn claude ENOENT——详见节点 events.jsonl",
     "code": -1
    },
-   "compactions": []
+   "compactions": [],
+   "diffs": [],
+   "plan": null,
+   "sev": null,
+   "audits": [
+    {
+     "node": "root/review",
+     "asked_at": "2026-11-03T08:08:49.642Z",
+     "question": "汇总口径：按模块还是按接口？",
+     "decision": null,
+     "decided_at": null,
+     "ms": null
+    },
+    {
+     "node": "root/summarize",
+     "asked_at": "2026-11-03T08:08:19.642Z",
+     "question": "缺少输入文件，是否改用 refs 直接读取？",
+     "decision": null,
+     "decided_at": null,
+     "ms": null
+    }
+   ]
   }
  ],
  "inbox": [],

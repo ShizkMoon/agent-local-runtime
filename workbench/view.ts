@@ -195,6 +195,47 @@ export interface ArtView {
   body: string;
 }
 
+/** S18：一个文件的变更视图（file_edit 事件聚合）。patch 拿不到就是 null —— 只报统计，不编行内容 */
+export interface DiffView {
+  file: string;
+  /** 新增行数（事件说多少就是多少；没有就是 0） */
+  add: number;
+  /** 删除行数 */
+  del: number;
+  /** @@ 段数（没有 patch 时为 0） */
+  hunks: number;
+  /** unified diff 的前 DIFF_PATCH_LINES 行；事件里没有 diff 正文 → null */
+  patch: string[] | null;
+  /** patch 的完整行数（patch=null 时为 0） */
+  total: number;
+  /** total > patch.length：UI 必须显示"还有 N 行" */
+  truncated: boolean;
+}
+
+/** S23：计划条（ev_todo 事件投影） */
+export interface PlanItem {
+  text: string;
+  done: boolean;
+}
+export interface PlanView {
+  items: PlanItem[];
+  /** 第一个未完成项的下标；全部完成=null */
+  current: number | null;
+}
+
+/** S23：reviewer 节点的裁决强度（result.output.severity） */
+export type Severity = "note" | "warn" | "block";
+
+/** S26：审批审计对（问了什么 / 谁在什么时候答的 / 隔了多久） */
+export interface AuditView {
+  node: string;
+  asked_at: string | null;
+  question: string;
+  decision: string | null;
+  decided_at: string | null;
+  ms: number | null;
+}
+
 export interface TreeNodeView {
   /** 深度（path 段数）：root=1 不进树，子节点从 2 起 */
   l: number;
@@ -220,6 +261,14 @@ export interface TreeNodeView {
   agg: AggStatus;
   /** S20：该节点发生过的上下文压缩（compaction 三事件投影） */
   compactions: CompactionView[];
+  /** S18：该节点的文件变更（按文件聚合） */
+  diffs: DiffView[];
+  /** S23：计划条 */
+  plan: PlanView | null;
+  /** S23：reviewer 裁决强度 */
+  sev: Severity | null;
+  /** S26：审批审计对 */
+  audits: AuditView[];
 }
 
 export interface RunView {
@@ -248,6 +297,14 @@ export interface RunView {
   turn: TurnView;
   /** S20：根节点发生过的压缩（子节点的在 tree[].compactions 上） */
   compactions: CompactionView[];
+  /** S18：根节点的文件变更（按文件聚合，过程组里渲染「文件名 +N −M」） */
+  diffs: DiffView[];
+  /** S23：根节点计划条 */
+  plan: PlanView | null;
+  /** S23：本 run 里最重的裁决强度（block > warn > note） */
+  sev: Severity | null;
+  /** S26：本 run 的审批审计对（可点开） */
+  audits: AuditView[];
 }
 
 export interface InboxItem {
@@ -271,6 +328,8 @@ export interface ViewOptions {
   now?: number;
   /** step 输出保留行数，默认 STEP_OUT_LINES */
   stepLines?: number;
+  /** stat 指纹复用窗口（ms）。0=每次都 stat（测试默认）；server 传 1000 做热路径优化 */
+  statTtl?: number;
 }
 
 export interface EvLine {
@@ -310,14 +369,41 @@ export function nodePaths(runsDir: string, rootId: string): string[] {
       if (ent.name === "artifacts") continue;
       const childRel = rel ? `${rel}/${ent.name}` : ent.name;
       const childDir = join(dir, ent.name);
-      if (existsSync(join(childDir, "spec.json")) || existsSync(join(childDir, "result.json")) || existsSync(join(childDir, "events.jsonl"))) {
-        out.push(childRel);
-      }
+      // 一次 readdir 判"是不是节点"（比 3 次 existsSync 便宜，也不会把空目录算成节点）
+      let marks: string[] = [];
+      try { marks = readdirSync(childDir); } catch { marks = []; }
+      if (marks.includes("spec.json") || marks.includes("result.json") || marks.includes("events.jsonl")) out.push(childRel);
       walk(childDir, childRel, depth + 1); // 节点目录内仍可能有嵌套子节点（path=root/fetch）
     }
   };
   walk(nodesRoot, "", 0);
   return out.sort();
+}
+
+/** buildView 用的节点路径表：窗口内复用（watcher 有变化会先 clearViewCache） */
+function nodePathsCached(runsDir: string, rootId: string, now: number, ttl: number): string[] {
+  const nd = safeJoinIn(runsDir, rootId, "nodes");
+  let ms = -1;
+  try { ms = nd ? statSync(nd).mtimeMs : -1; } catch { ms = -1; }
+  const hit = PATHS_CACHE.get(rootId);
+  if (hit && hit.ms === ms) return hit.list;      // 目录 mtime 不变 = 节点集合不变（1 次 stat 换掉一轮 walk）
+  const list = nodePaths(runsDir, rootId);
+  PATHS_CACHE.set(rootId, { ms, list });
+  if (PATHS_CACHE.size > CACHE_MAX) PATHS_CACHE.clear();
+  return list;
+}
+
+/** buildView 用的 run.json：窗口内复用 */
+function runMetaCached(runsDir: string, rootId: string, now: number, ttl: number): any {
+  const f = join(runsDir, rootId, "run.json");
+  let ms = -1;
+  try { ms = statSync(f).mtimeMs; } catch { ms = -1; }
+  const hit = META_CACHE.get(rootId);
+  if (hit && hit.ms === ms) return hit.meta;      // run.json 没动就不重读
+  const meta = readJson<any>(f);
+  META_CACHE.set(rootId, { ms, meta });
+  if (META_CACHE.size > CACHE_MAX) META_CACHE.clear();
+  return meta;
 }
 
 export function nodeStatus(runsDir: string, rootId: string, path: string): { status: string; summary?: string; finished_at?: string } {
@@ -648,6 +734,122 @@ export function compactionsOf(events: EvLine[]): CompactionView[] {
   return out;
 }
 
+// ---------------------------------------------------------------- S18：文件变更（diff）
+
+/** 每个文件保留的 patch 行数上限（UI 展开先给 40 行，剩下靠 total 说"还有 N 行"） */
+export const DIFF_PATCH_LINES = 60;
+
+/** 这段正文像不像 unified diff：有 @@ 段，或有 ---/+++ 头，或同时有 + 行与 - 行 */
+function looksLikeUnified(t: string): boolean {
+  return /^@@ /m.test(t) || (/^--- /m.test(t) && /^\+\+\+ /m.test(t)) || (/^\+[^+]/m.test(t) && /^-[^-]/m.test(t));
+}
+
+/**
+ * file_edit 事件 → 按文件聚合的 DiffView。
+ * 诚实性：只有正文确实像 unified diff 才给 patch；否则 patch=null，只留 +N −M 统计（不编造行内容）。
+ */
+export function diffsOf(events: EvLine[]): DiffView[] {
+  const byFile = new Map<string, { add: number; del: number; hunks: number; patch: string[]; total: number }>();
+  const order: string[] = [];
+  for (const { ev } of events) {
+    if (ev?.kind !== "file_edit") continue;
+    const d = ev.data ?? {};
+    const file = String(d.path ?? d.file ?? "");
+    if (!file) continue;
+    let rec = byFile.get(file);
+    if (!rec) { rec = { add: 0, del: 0, hunks: 0, patch: [], total: 0 }; byFile.set(file, rec); order.push(file); }
+    rec.add += Math.max(0, firstNum(d, ["plus", "add", "added", "additions"]) ?? 0);
+    rec.del += Math.max(0, firstNum(d, ["minus", "del", "removed", "deletions"]) ?? 0);
+    const text = textOf(d.diff ?? d.patch ?? d.preview ?? "");
+    if (!text || !looksLikeUnified(text)) continue;
+    const lines = text.replace(/\r\n/g, "\n").split("\n");
+    rec.hunks += lines.filter((l) => l.startsWith("@@")).length;
+    rec.total += lines.length;
+    for (const l of lines) if (rec.patch.length < DIFF_PATCH_LINES) rec.patch.push(l);
+  }
+  return order.map((file) => {
+    const r = byFile.get(file)!;
+    return {
+      file, add: r.add, del: r.del, hunks: r.hunks,
+      patch: r.patch.length ? r.patch : null,
+      total: r.total, truncated: r.total > r.patch.length,
+    };
+  });
+}
+
+// ---------------------------------------------------------------- S23：计划条
+
+/**
+ * 计划条：ev_todo 事件（data.items / data.todos）优先，没有就退回节点 todo.json。
+ * current = 第一个未完成项；全完成 = null（不瞎猜"下一步"）。
+ */
+export function planOf(events: EvLine[], todoJson?: any): PlanView | null {
+  const norm = (raw: any[]): PlanItem[] => raw
+    .map((it: any) => typeof it === "string"
+      ? { text: it, done: false }
+      : { text: String(it?.text ?? it?.title ?? it?.t ?? ""), done: !!(it?.done ?? it?.completed) })
+    .filter((i: PlanItem) => i.text);
+  let items: PlanItem[] | null = null;
+  for (const { ev } of events) {
+    if (ev?.kind !== "todo") continue;
+    const d = ev.data ?? {};
+    const raw = Array.isArray(d.items) ? d.items : Array.isArray(d.todos) ? d.todos : null;
+    if (raw) items = norm(raw);
+  }
+  if (!items && Array.isArray(todoJson?.items)) items = norm(todoJson.items);
+  if (!items || !items.length) return null;
+  const idx = items.findIndex((i) => !i.done);
+  return { items, current: idx >= 0 ? idx : null };
+}
+
+// ---------------------------------------------------------------- S23：裁决强度
+
+export function severityOf(result: any): Severity | null {
+  const raw = String(result?.output?.severity ?? result?.output?.sev ?? result?.severity ?? "").toLowerCase();
+  return raw === "note" || raw === "warn" || raw === "block" ? raw : null;
+}
+
+const SEV_RANK: Record<Severity, number> = { note: 1, warn: 2, block: 3 };
+export function sevMax(list: (Severity | null)[]): Severity | null {
+  let best: Severity | null = null;
+  for (const s of list) if (s && (!best || SEV_RANK[s] > SEV_RANK[best])) best = s;
+  return best;
+}
+
+// ---------------------------------------------------------------- S26：审批审计对
+
+const ASK_KINDS = new Set(["gate", "approve_ask"]);
+const DECIDE_KINDS = new Set(["approve_decide", "gate_ans"]);
+
+/** 问一次答一次配成一对；问完没人答的也要留一条（decision=null），不许只显示"已裁决" */
+export function auditsOf(events: EvLine[], node = ""): AuditView[] {
+  const out: AuditView[] = [];
+  let ask: { asked_at: string | null; question: string } | null = null;
+  for (const { ev } of events) {
+    const kind = String(ev?.kind ?? "");
+    if (ASK_KINDS.has(kind)) {
+      if (ask) out.push({ node, ...ask, decision: null, decided_at: null, ms: null });
+      const d = ev.data ?? {};
+      ask = {
+        asked_at: typeof ev.ts === "string" ? ev.ts : null,
+        question: String(d.question ?? d.tool ?? d.summary ?? "审批请求").split("\n")[0].slice(0, 120),
+      };
+    } else if (DECIDE_KINDS.has(kind)) {
+      const d = ev.data ?? {};
+      const decision = String(d.decision ?? d.answer ?? "").trim() || null;
+      const asked = ask?.asked_at ?? null;
+      const decided = typeof ev.ts === "string" ? ev.ts : null;
+      out.push({
+        node, asked_at: asked, question: ask?.question ?? "", decision, decided_at: decided,
+        ms: asked && decided ? Math.max(0, Date.parse(decided) - Date.parse(asked)) : null,
+      });
+      ask = null;
+    }
+  }
+  if (ask) out.push({ node, ...ask, decision: null, decided_at: null, ms: null });
+  return out;
+}
+
 // ---------------------------------------------------------------- S17：turn 结局
 
 const MAX_TOKENS = /^(max[-_]?tokens?|maxTokens?|length)$/i;
@@ -723,15 +925,61 @@ function viewStatus(runsDir: string, rootId: string, spec: any, r: any): string 
 const APPROVAL_REQ = "gate-req.json";
 const APPROVAL_ANS = "gate-ans.json";
 const APPROVAL_TTL_MS = 10 * 60_000;
-export function pendingApproval(dir: string, now: number): boolean {
-  const req = join(dir, APPROVAL_REQ);
-  if (!existsSync(req)) return false;
+/** gate-ans.decision 的闭集：不在里面 = 没答。坏 ans 不许把"等你"弄消失（fail-closed） */
+export const GATE_DECISIONS = ["allowed-once", "rejected", "cancelled", "unavailable"] as const;
+const GATE_DECISION_SET = new Set<string>(GATE_DECISIONS);
+
+export interface ApprovalState {
+  /** 还有人要答（UI 卡照旧显示） */
+  pending: boolean;
+  /** 有 ans 但内容非法：仍算未答，UI 要提示"回答无效，请重答" */
+  invalid: boolean;
+  /** 解析后的 gate-req（pending 时非空） */
+  req: any | null;
+  asked_at: string | null;
+  age_ms: number | null;
+}
+
+const NO_APPROVAL: ApprovalState = { pending: false, invalid: false, req: null, asked_at: null, age_ms: null };
+
+/**
+ * 单源判定：文件在 / 未超 TTL / 没有"合法且不比 req 旧"的 gate-ans。
+ * server.ts 不再自带一份，直接调这里（S27 的 badGateAns 就是靠这层收口的）。
+ */
+export function approvalState(dir: string, now = Date.now()): ApprovalState {
+  const reqFile = join(dir, APPROVAL_REQ);
+  if (!existsSync(reqFile)) return NO_APPROVAL;
   let reqMs = 0;
-  try { reqMs = statSync(req).mtimeMs; } catch { return false; }
-  const ans = join(dir, APPROVAL_ANS);
-  if (existsSync(ans)) {
-    try { if (statSync(ans).mtimeMs >= reqMs) return false; } catch { /* ans 刚被清：当未答 */ }
+  try { reqMs = statSync(reqFile).mtimeMs; } catch { return NO_APPROVAL; }
+  let ansMs = 0, invalid = false;
+  const ansFile = join(dir, APPROVAL_ANS);
+  if (existsSync(ansFile)) {
+    try {
+      ansMs = statSync(ansFile).mtimeMs;
+      const a = JSON.parse(readFileSync(ansFile, "utf8"));
+      if (!GATE_DECISION_SET.has(String(a?.decision ?? ""))) invalid = true;
+    } catch { invalid = true; }        // 半截/坏 JSON 一样算"没答"
   }
+  const answered = ansMs > 0 && ansMs >= reqMs && !invalid;
+  const age = now - reqMs;
+  if (answered || age > APPROVAL_TTL_MS) return NO_APPROVAL;
+  const req = readJson<any>(reqFile);
+  return {
+    pending: true, invalid,
+    req: req && typeof req === "object" ? req : null,
+    asked_at: new Date(reqMs).toISOString(),
+    age_ms: Math.max(0, Math.round(age)),
+  };
+}
+
+export function pendingApproval(dir: string, now = Date.now()): boolean {
+  return approvalState(dir, now).pending;
+}
+
+/** stat 缓存版：mtime 与 ans 合法性都由 statNode 带出来，这里只比较，不再碰磁盘 */
+function approvalByStamp(reqMs: number | null, ansMs: number | null, ansInvalid: boolean, now: number): boolean {
+  if (reqMs == null) return false;
+  if (ansMs != null && ansMs >= reqMs && !ansInvalid) return false;
   return now - reqMs <= APPROVAL_TTL_MS;
 }
 
@@ -757,6 +1005,119 @@ interface NodeProj {
   ev: any | null;
   turn: TurnView;
   compactions: CompactionView[];
+  diffs: DiffView[];
+  plan: PlanView | null;
+  sev: Severity | null;
+  audits: AuditView[];
+}
+
+// ---- S26：mtime 缓存。stat 指纹不变 → 复用上次投影（投影里只放与时间无关的字段；
+//      el / dur / approval 这类"跟着 now 变"的东西每次现算，不进缓存） ----
+interface NodeCacheEntry {
+  fp: string;
+  /** 整份节点投影（除 el / approval / 带 depends 的 st 外都与 now 无关） */
+  spec: any;
+  r: any;
+  gate: any;
+  live: boolean;
+  created: number;
+  out: string[];
+  st: string;
+  nm: string;
+  spent: number | null;
+  wait: string | null;
+  steps: StepView[];
+  diffs: DiffView[];
+  compactions: CompactionView[];
+  plan: PlanView | null;
+  audits: AuditView[];
+  turn: TurnView;
+  sev: Severity | null;
+  todo: { text: string; done: boolean }[] | null;
+  d: string;
+  sum: string;
+  lastEv: any | null;
+}
+
+/** stat 指纹缓存条目：一个窗口内重复请求不再逐个 stat（SSE watcher 有变化会先清掉） */
+interface StatEntry {
+  at: number;
+  fp: string;
+  live: boolean;
+  reqMs: number | null;
+  ansMs: number | null;
+  /** gate-ans 存在但 decision 不在闭集（或 JSON 坏掉）：仍算未答 */
+  invalidAns: boolean;
+  specMs: number | null;
+}
+
+const NODE_CACHE = new Map<string, NodeCacheEntry>();
+const STAT_CACHE = new Map<string, StatEntry>();
+/** 每个 run 的节点路径表与 run.json：同样按窗口复用，免掉 500×(walk + read) */
+const PATHS_CACHE = new Map<string, { ms: number; list: string[] }>();
+const META_CACHE = new Map<string, { ms: number; meta: any }>();
+/** 整个 run 的投影（键 = run 目录 / run.json / nodes 目录的 mtime+size） */
+const RUN_CACHE = new Map<string, { fp: string; nodes: number; part: RunPart }>();
+const CACHE_MAX = 4000;
+/** stat 指纹的复用窗口（ms）。watcher 变更会立刻 clearViewCache，这里只是兜底 */
+const STAT_TTL_MS = 1000;
+let CACHE_HIT = 0, CACHE_MISS = 0;
+
+/** 清缓存（测试改完夹具/临时目录后调用；生产由 SSE watcher 调） */
+export function clearViewCache(): void {
+  NODE_CACHE.clear();
+  STAT_CACHE.clear();
+  PATHS_CACHE.clear();
+  META_CACHE.clear();
+  RUN_CACHE.clear();
+  CACHE_HIT = 0;
+  CACHE_MISS = 0;
+}
+
+/** 缓存命中统计（性能测量与测试断言用） */
+export function viewCacheStats(): { hits: number; misses: number; size: number } {
+  return { hits: CACHE_HIT, misses: CACHE_MISS, size: NODE_CACHE.size };
+}
+
+/** gate-ans 的 decision 是否不合法（文件不在 = 不非法；坏 JSON / 闭集外 = 非法） */
+function ansIsInvalid(dir: string): boolean {
+  const f = join(dir, APPROVAL_ANS);
+  if (!existsSync(f)) return false;
+  try {
+    const a = JSON.parse(readFileSync(f, "utf8"));
+    return !GATE_DECISION_SET.has(String(a?.decision ?? ""));
+  } catch { return true; }
+}
+
+/** 节点指纹 + 几个时间戳：一个窗口内只 stat 一次；live/审批时间戳一起带出来 */
+function statNode(dir: string, stepLines: number, now: number, ttl: number): StatEntry {
+  const hit = ttl > 0 ? STAT_CACHE.get(dir) : undefined;
+  if (hit && now - hit.at < ttl) return hit;
+  const one = (f: string): string => {
+    try { const s = statSync(join(dir, f)); return `${s.size}.${Math.round(s.mtimeMs)}`; } catch { return "-"; }
+  };
+  const ms = (f: string): number | null => {
+    try { return statSync(join(dir, f)).mtimeMs; } catch { return null; }
+  };
+  const live = existsSync(join(dir, "worker.json"));
+  const entry: StatEntry = {
+    at: now,
+    live,
+    reqMs: ms(APPROVAL_REQ),
+    ansMs: ms(APPROVAL_ANS),
+    invalidAns: ansIsInvalid(dir),
+    specMs: ms("spec.json"),
+    fp: [
+      one("events.jsonl"), one("result.json"), one("spec.json"), one("todo.json"), one("gate.json"),
+      one("usage.json"), one("worker.json"), one("gate-req.json"), one("gate-ans.json"), one("artifacts"),
+      live ? 1 : 0, stepLines,
+    ].join("|"),
+  };
+  if (ttl > 0) {
+    STAT_CACHE.set(dir, entry);
+    if (STAT_CACHE.size > CACHE_MAX) STAT_CACHE.clear();   // 有界：长跑守护进程不吃内存
+  }
+  return entry;
 }
 
 /** usage.json → 累计 tokens：旧字段 tokens 优先，没有就按分项相加（与 transcribe.usageTokens 同规则） */
@@ -768,43 +1129,90 @@ function usageSpent(u: any): number | null {
   return sum > 0 ? sum : null;
 }
 
-function projectNode(runsDir: string, rootId: string, path: string, now: number, stepLines: number): NodeProj {
+function projectNode(runsDir: string, rootId: string, path: string, now: number, stepLines: number, statTtl: number): NodeProj {
   const dir = join(runsDir, rootId, "nodes", ...path.split("/"));
-  const spec = readJson<any>(join(dir, "spec.json"));
-  const r = readJson<any>(join(dir, "result.json"));
-  const gate = readJson<any>(join(dir, "gate.json"));
-  const usage = readJson<any>(join(dir, "usage.json"));
-  const todo = readJson<any>(join(dir, "todo.json"));
-  const events = readEvents(join(dir, "events.jsonl"));
-  let ev: any = null;
-  for (let k = events.length - 1; k >= 0; k--) if (events[k].ev?.ts) { ev = events[k].ev; break; }
-  const live = existsSync(join(dir, "worker.json"));
-  const specFile = join(dir, "spec.json");
-  // 无 spec.created_at，用 spec.json mtime 当"开始"
-  const created = existsSync(specFile) ? statSync(specFile).mtimeMs : now;
-  const ad = join(dir, "artifacts");
-  const out = existsSync(ad)
-    ? readdirSync(ad, { withFileTypes: true }).filter(f => f.isFile()).map(f => f.name).sort()
-    : [];
+  const sn = statNode(dir, stepLines, now, statTtl);
+
+  // 整份投影走指纹缓存：命中时这次调用一个 stat 都不做（除了下面 el 的纯计算）
+  let c = NODE_CACHE.get(dir);
+  if (!c || c.fp !== sn.fp) {
+    CACHE_MISS += 1;
+    const spec = readJson<any>(join(dir, "spec.json"));
+    const r = readJson<any>(join(dir, "result.json"));
+    const gate = readJson<any>(join(dir, "gate.json"));
+    const usage = readJson<any>(join(dir, "usage.json"));
+    const todo = readJson<any>(join(dir, "todo.json"));
+    const created = sn.specMs ?? now;
+    const ad = join(dir, "artifacts");
+    const out = existsSync(ad)
+      ? readdirSync(ad, { withFileTypes: true }).filter(f => f.isFile()).map(f => f.name).sort()
+      : [];
+    const events = readEvents(join(dir, "events.jsonl"));
+    let lastEv: any = null;
+    for (let k = events.length - 1; k >= 0; k--) if (events[k].ev?.ts) { lastEv = events[k].ev; break; }
+    const audits = auditsOf(events, path);
+    if (sn.invalidAns) {
+      // fail-closed 的另一半：坏 ans 不让人消失，但要在审计里留痕（UI 提示"回答无效，请重答"）
+      let askedMs: number | null = null;
+      try { askedMs = statSync(join(dir, APPROVAL_REQ)).mtimeMs; } catch { askedMs = null; }
+      audits.push({
+        node: path,
+        asked_at: askedMs ? new Date(askedMs).toISOString() : null,
+        question: String(gate?.question ?? "").split("\n")[0].slice(0, 120),
+        decision: "invalid-answer",
+        decided_at: sn.ansMs ? new Date(sn.ansMs).toISOString() : null,
+        ms: null,
+      });
+    }
+    c = {
+      fp: sn.fp, spec, r, gate, live: sn.live, created, out,
+      st: viewStatus(runsDir, rootId, spec, r),
+      nm: nodeName(runsDir, rootId, path),
+      spent: usageSpent(usage) ?? r?.spent?.tokens ?? null,
+      wait: r?.status === "waiting" ? (gate?.question ?? (Array.isArray(r?.wait_on) ? `等子节点 ${r.wait_on.join(", ")}` : r?.wait_on) ?? null) : null,
+      steps: buildSteps(events, { lines: stepLines, live: sn.live }),
+      diffs: diffsOf(events),
+      compactions: compactionsOf(events),
+      plan: planOf(events, todo),
+      audits,
+      turn: projectTurn(events, r, sn.live),
+      sev: severityOf(r),
+      todo: Array.isArray(todo?.items) ? todo.items : null, // S9 ev_todo 清单投影
+      d: String(r?.summary ?? (lastEv ? evHint(lastEv) : "")).split("\n")[0].slice(0, 80), // 一句话
+      sum: r?.summary ?? "",
+      lastEv,
+    };
+    NODE_CACHE.set(dir, c);
+    if (NODE_CACHE.size > CACHE_MAX) NODE_CACHE.clear();   // 粗暴但有界，防止长跑守护进程吃内存
+  } else {
+    CACHE_HIT += 1;
+  }
+
   return {
-    path, spec, r, gate,
-    approval: pendingApproval(dir, now),   // S25：未答审批也算"人在环"
-    st: viewStatus(runsDir, rootId, spec, r),
+    path, spec: c.spec, r: c.r, gate: c.gate,
+    // S25：未答审批也算"人在环"（TTL 跟 now 有关 → 每次按 stat 带出的 mtime 现算）
+    approval: approvalByStamp(sn.reqMs, sn.ansMs, sn.invalidAns, now),
+    // 带 depends 的节点状态依赖别人的 result.json → 不能吃缓存，现算
+    st: c.spec?.depends?.length ? viewStatus(runsDir, rootId, c.spec, c.r) : c.st,
     // S10 控制面投影：live=worker.json 租约在、cur=尾事件工具/动作、spent=token 累计、wait=waiting 原因
-    live,
-    cur: ev?.data?.tool ?? ev?.kind ?? null,
-    spent: usageSpent(usage) ?? r?.spent?.tokens ?? null,
-    todo: Array.isArray(todo?.items) ? todo.items : null, // S9 ev_todo 清单投影
-    wait: r?.status === "waiting" ? (gate?.question ?? (Array.isArray(r?.wait_on) ? `等子节点 ${r.wait_on.join(", ")}` : r?.wait_on) ?? null) : null,
-    nm: nodeName(runsDir, rootId, path),
-    d: String(r?.summary ?? (ev ? evHint(ev) : "")).split("\n")[0].slice(0, 80), // 一句话
-    sum: r?.summary ?? "",
-    steps: buildSteps(events, { lines: stepLines, live }),
-    out,
-    el: mmss((r?.finished_at ? Date.parse(r.finished_at) : now) - created),
-    ev,
-    turn: projectTurn(events, r, live),
-    compactions: compactionsOf(events),   // S20：压缩可见（三事件合成）
+    live: c.live,
+    cur: c.lastEv?.data?.tool ?? c.lastEv?.kind ?? null,
+    spent: c.spent,
+    todo: c.todo,
+    wait: c.wait,
+    nm: c.nm,
+    d: c.d,
+    sum: c.sum,
+    steps: c.steps,
+    out: c.out,
+    el: mmss((c.r?.finished_at ? Date.parse(c.r.finished_at) : now) - c.created),
+    ev: c.lastEv,
+    turn: c.turn,
+    compactions: c.compactions,   // S20：压缩可见（三事件合成）
+    diffs: c.diffs,               // S18：文件变更
+    plan: c.plan,                 // S23：计划条
+    sev: c.sev,                   // S23：裁决强度
+    audits: c.audits,             // S26：审批审计对
   };
 }
 
@@ -816,25 +1224,72 @@ function projectNode(runsDir: string, rootId: string, path: string, now: number,
 export function buildView(runsDir: string, opts: ViewOptions = {}): ViewPayload {
   const now = opts.now ?? Date.now();
   const stepLines = opts.stepLines ?? STEP_OUT_LINES;
+  const statTtl = opts.statTtl ?? 0;
   const runs: RunView[] = [], inbox: InboxItem[] = [], settled: [string, string, string][] = [];
   if (!existsSync(runsDir)) return { runs, inbox, settled };
 
   const metaOf = new Map<string, any>();
   const rootIds = readdirSync(runsDir, { withFileTypes: true })
     .filter(d => d.isDirectory() && okId(d.name))
-    .map(d => { metaOf.set(d.name, readJson<any>(join(runsDir, d.name, "run.json"))); return d.name; })
+    .map(d => { metaOf.set(d.name, runMetaCached(runsDir, d.name, now, statTtl)); return d.name; })
     .sort((a, b) => String(metaOf.get(b)?.created_at ?? "").localeCompare(String(metaOf.get(a)?.created_at ?? ""))); // 新 run 在前（同 /api/runs）
 
   for (const rootId of rootIds) {
     const meta = metaOf.get(rootId);
-    const nodes = nodePaths(runsDir, rootId).map(path => projectNode(runsDir, rootId, path, now, stepLines));
+    const paths = nodePathsCached(runsDir, rootId, now, statTtl);
+    const rfp = runFingerprint(runsDir, rootId, paths);
+    const hit = RUN_CACHE.get(rootId);
+    let part: RunPart;
+    if (hit && hit.fp === rfp) {
+      CACHE_HIT += hit.nodes;                // 与 NODE_CACHE 同口径：等于这么多节点的投影被复用
+      part = hit.part;                       // 整个 run 的投影（含 inbox/settled）原样复用
+    } else {
+      part = buildRunPart(runsDir, rootId, meta, now, stepLines, statTtl, paths);
+      RUN_CACHE.set(rootId, { fp: rfp, nodes: paths.length, part });
+      if (RUN_CACHE.size > CACHE_MAX) RUN_CACHE.clear();
+    }
+    const runIdx = runs.length;
+    for (const it of part.inbox) it.gate.run = runIdx;   // gate.run 指回最终下标（缓存复用时也要重指）
+    runs.push(part.view);
+    inbox.push(...part.inbox);
+    if (part.settled) settled.push(part.settled);
+  }
+  return { runs, inbox, settled };
+}
+
+/** 一个 run 的完整投影（run 级缓存单位） */
+interface RunPart { view: RunView; inbox: InboxItem[]; settled: [string, string, string] | null; }
+
+/**
+ * run 级指纹：run 目录 / run.json / nodes 目录三处 mtime+size。
+ * 命中就跳过整轮 readdir(nodes) + 逐节点 stat —— 500 run 时这是热路径的大头。
+ * 内容级变化（events.jsonl 追加）由 server 的 fs.watch → clearViewCache 兜住。
+ */
+function runFingerprint(runsDir: string, rootId: string, paths: string[]): string {
+  const one = (p: string): string => {
+    try { const s = statSync(p); return `${s.size}.${Math.round(s.mtimeMs)}`; } catch { return "-"; }
+  };
+  const base = join(runsDir, rootId);
+  // 逐节点的 events/result/spec：内容级失效（追加事件也会变），别只靠目录 mtime
+  const nodeMs = paths.map(p => {
+    const d = join(base, "nodes", ...p.split("/"));
+    return one(d) + "," + one(join(d, "events.jsonl")) + "," + one(join(d, "result.json")) + "," + one(join(d, "spec.json"));
+  });
+  return [one(base), one(join(base, "run.json")), one(join(base, "nodes")), ...nodeMs].join("|");
+}
+
+function buildRunPart(runsDir: string, rootId: string, meta: any, now: number, stepLines: number, statTtl: number, paths: string[]): RunPart {
+  const inboxLocal: InboxItem[] = [];
+  let settledLocal: [string, string, string] | null = null;
+  {
+    const nodes = paths.map(path => projectNode(runsDir, rootId, path, now, stepLines, statTtl));
     const waiting = nodes.filter(n => n.st === "input");
     const allDone = nodes.length > 0 && nodes.every(n => n.r?.status === "done");
     const ended = nodes.map(n => n.r?.finished_at).filter(Boolean).sort().pop() as string | undefined;
     // run 不自动隐藏：done/failed 也留在 runs 里可打开，只有显式 DELETE 才消失
     const status: RunView["status"] = allDone ? "done" : waiting.length ? "input"
       : nodes.some(n => n.r?.status === "failed") ? "failed" : "working";
-    if (allDone) settled.push([meta?.subject ?? rootId, hhmm(ended ?? meta?.created_at ?? new Date(now).toISOString()), rootId]);
+    if (allDone) settledLocal = [meta?.subject ?? rootId, hhmm(ended ?? meta?.created_at ?? new Date(now).toISOString()), rootId];
     const rootNode = nodes.find(n => n.path === "root") ?? nodes[0];
     // run 级 turn：失败时以"第一个失败节点"为准——run 状态是 failed，结局那行不许说"已完成"（R4）
     const failedNode = nodes.find(n => n.r?.status === "failed");
@@ -855,12 +1310,16 @@ export function buildView(runsDir: string, opts: ViewOptions = {}): ViewPayload 
         turn: n.turn,
         agg: nodeAgg(n.st, n.approval),   // S25：节点四态（与 run 行同一套；未答审批 = 等你）
         compactions: n.compactions,
+        diffs: n.diffs,                   // S18
+        plan: n.plan,                     // S23
+        sev: n.sev,                       // S23
+        audits: n.audits,                 // S26
       }));
     // arts：全部节点 artifacts/ 汇总到 run 级；非 root 节点的 fn 带 path 前缀防重名
     const arts: ArtView[] = [];
     for (const n of nodes) {
+      if (!n.out.length) continue;                  // projectNode 已经列过 artifacts/：空就整段跳过（省 existsSync+readdir）
       const ad = join(runsDir, rootId, "nodes", ...n.path.split("/"), "artifacts");
-      if (!existsSync(ad)) continue;
       for (const f of readdirSync(ad, { withFileTypes: true }).sort((x, y) => x.name.localeCompare(y.name))) {
         if (!f.isFile()) continue;
         const fp = join(ad, f.name);
@@ -872,7 +1331,6 @@ export function buildView(runsDir: string, opts: ViewOptions = {}): ViewPayload 
         });
       }
     }
-    const runIdx = runs.length;
     const last = runPulseFrom(nodes);
     // S6：run 行 Σtok = 各节点 spent（result.spent 或 usage.json）累加
     const spentTotal = nodes.reduce((s, n) => s + (typeof n.spent === "number" ? n.spent : 0), 0);
@@ -881,7 +1339,7 @@ export function buildView(runsDir: string, opts: ViewOptions = {}): ViewPayload 
     // 还没有任何节点 = 还没开始（不是 done）；有节点才按最紧急聚合
     const agg = aggList.length ? aggMax(aggList) : "working";
     const rootSteps = rootNode?.steps ?? [];
-    runs.push({
+    const view: RunView = {
       id: rootId, title: meta?.subject ?? rootId, status,
       agg, agg_n: aggList.filter(a => a === agg).length,
       dur: mmss((ended ? Date.parse(ended) : now) - Date.parse(meta?.created_at ?? new Date(now).toISOString())),
@@ -896,8 +1354,12 @@ export function buildView(runsDir: string, opts: ViewOptions = {}): ViewPayload 
       stats: stepStats(rootSteps),                                       // S25：组头统计（N 命令 · M 编辑 · 42s）
       turn: runTurn,
       compactions: rootNode?.compactions ?? [],                          // S20：根节点的压缩记录
-    });
-    // inbox：waiting 节点 → 人工闸门条目（gate.run 指回 runs 数组下标）
+      diffs: rootNode?.diffs ?? [],                                      // S18：根节点的文件变更
+      plan: rootNode?.plan ?? null,                                      // S23：计划条
+      sev: sevMax(nodes.map(n => n.sev)),                                // S23：本 run 最重裁决强度
+      audits: nodes.flatMap(n => n.audits),                              // S26：审批审计对（全节点）
+    };
+    // inbox：waiting 节点 → 人工闸门条目（gate.run 由 buildView 落最终下标）
     for (const n of waiting) {
       const q = String(n.gate?.question ?? n.r?.summary ?? "");
       const opts: [string, string, string][] = n.gate?.opts?.length
@@ -905,14 +1367,14 @@ export function buildView(runsDir: string, opts: ViewOptions = {}): ViewPayload 
         : [["同意", "", "已同意"], ["拒绝", "", "已拒绝"]];
       const segs = n.path.split("/");
       const crumb = [meta?.subject ?? rootId, ...segs.map((_, i) => nodeName(runsDir, rootId, segs.slice(0, i + 1).join("/")))];
-      inbox.push({
+      inboxLocal.push({
         id: n.spec?.id ?? `node:${rootId}/${n.path}`,
         t: q.split("\n")[0].slice(0, 80), d: q, crumb, opts,
-        gate: { run: runIdx, nm: n.nm, pd: `回复已送达，${n.nm} 恢复执行`, sn: "已回复 · 节点恢复运行" },
+        gate: { run: 0, nm: n.nm, pd: `回复已送达，${n.nm} 恢复执行`, sn: "已回复 · 节点恢复运行" },
       });
     }
+    return { view, inbox: inboxLocal, settled: settledLocal };
   }
-  return { runs, inbox, settled };
 }
 
 /** 已在 projectNode 里读过尾事件，这里不再二次读盘（等价 runPulse(runsDir, rootId, paths)） */
@@ -921,3 +1383,7 @@ function runPulseFrom(nodes: NodeProj[]): { hint: string } | null {
   for (const n of nodes) if (n.ev && (!best || n.ev.ts > best.ts)) best = n.ev;
   return best ? { hint: evHint(best) } : null;
 }
+
+
+
+

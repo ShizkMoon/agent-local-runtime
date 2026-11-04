@@ -649,6 +649,58 @@ button.stp-h:hover{background:var(--hov)}
 
 .fadein{animation:fade var(--t-med) var(--e)}
 @keyframes fade{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+/* S18/S23/S24/S26：diff、计划条、裁决强度、命令面板、健康页、toast */
+.planbar{display:flex;align-items:center;gap:8px;margin:2px 0 8px;padding:6px 10px;border:1px solid var(--ln);border-radius:var(--r-ctl);background:var(--s0);font-size:13px;color:var(--t2)}
+.planbar b{color:var(--t3);font-weight:600;flex:none}
+.planbar .cur{color:var(--t1);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.planbar .num{margin-left:auto;color:var(--t3);font-variant-numeric:tabular-nums;flex:none}
+.planbar .hint{color:var(--t3);cursor:pointer;background:none;border:0;font:inherit;padding:0 2px;flex:none}
+.planbar .hint:hover{color:var(--accent)}
+.planbody{margin:-4px 0 10px;padding:2px 10px 6px;border-left:2px solid var(--ln)}
+.planbody ol{margin:0;padding-left:18px}
+.planbody li{font-size:13px;color:var(--t2);line-height:1.7}
+.planbody li.done{color:var(--t3);text-decoration:line-through}
+.planbody li.cur{color:var(--t1);font-weight:600}
+.sevrow{display:flex;gap:8px;align-items:center;margin:0 0 8px;padding:5px 10px;border-radius:var(--r-ctl);font-size:13px}
+.sevrow b{font-weight:600}
+.sevrow .hint{margin-left:auto;background:none;border:0;font:inherit;font-size:12px;cursor:pointer;opacity:.8}
+.sev-note{background:var(--accent-soft);color:var(--t2)}
+.sev-warn{background:rgba(190,120,20,.13);color:var(--warn)}
+.sev-block{background:rgba(200,60,50,.13);color:var(--fig)}
+.sev-badge{display:inline-block;padding:0 5px;border-radius:5px;font-size:10.5px;line-height:16px;margin-left:4px;vertical-align:1px}
+.dffs{margin:8px 0 0}
+.dff{margin:6px 0 0}
+.dff-h{display:flex;align-items:center;gap:8px;width:100%;padding:5px 8px;border:1px solid var(--ln);border-radius:var(--r-ctl);background:var(--s0);font:inherit;font-size:13px;color:var(--t1);cursor:pointer;text-align:left}
+.dff-h:hover{border-color:var(--ln-hi);background:var(--hov)}
+.dff-h .dfile{font-family:var(--f-mono);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dff-h .add{color:var(--ok);font-variant-numeric:tabular-nums;flex:none}
+.dff-h .del{color:var(--fig);font-variant-numeric:tabular-nums;flex:none}
+.dff-h .hint{margin-left:auto;color:var(--t3);font-size:12px;flex:none}
+.dff-b{margin:4px 0 0;padding:8px 10px;border:1px solid var(--ln);border-radius:var(--r-ctl);background:var(--s1);font-family:var(--f-mono);font-size:12px;line-height:1.55;max-height:320px;overflow:auto;white-space:pre;color:var(--t2)}
+.dff-note{padding:8px 10px;border:1px dashed var(--ln);border-radius:var(--r-ctl);font-size:12px;color:var(--t3);margin-top:4px}
+.dff-foot{padding:4px 2px 0;color:var(--t3);font-size:12px}
+.ln-add{color:var(--ok)} .ln-del{color:var(--fig)} .ln-hd{color:var(--accent)}
+.ov{position:fixed;inset:0;z-index:60;display:flex;align-items:flex-start;justify-content:center;background:rgba(0,0,0,.34);padding-top:12vh}
+.ov[hidden]{display:none}
+.pal{width:min(640px,92vw);background:var(--s0);border:1px solid var(--ln);border-radius:14px;box-shadow:0 18px 60px rgba(0,0,0,.3);overflow:hidden}
+.pal input{width:100%;box-sizing:border-box;padding:12px 16px;border:0;border-bottom:1px solid var(--ln);background:transparent;color:var(--t1);font:inherit;font-size:14px;outline:none}
+.pal-list{max-height:46vh;overflow:auto;padding:6px}
+.pal-it{display:flex;gap:10px;align-items:center;padding:8px 10px;border-radius:8px;font-size:13px;color:var(--t2);cursor:pointer}
+.pal-it.sel{background:var(--accent-soft);color:var(--t1)}
+.pal-it .k{margin-left:auto;color:var(--t3);font-family:var(--f-mono);font-size:11px;flex:none}
+.pal-foot{padding:6px 12px;border-top:1px solid var(--ln);color:var(--t3);font-size:11px}
+.hp{width:min(760px,94vw);max-height:80vh;overflow:auto;background:var(--s0);border:1px solid var(--ln);border-radius:14px;box-shadow:0 18px 60px rgba(0,0,0,.3)}
+.hp header{display:flex;gap:8px;align-items:center;padding:12px 16px;border-bottom:1px solid var(--ln);position:sticky;top:0;background:var(--s0);z-index:1}
+.hp header b{font-size:14px}
+.hp header .hp-time{margin-left:auto;color:var(--t3);font-size:12px}
+.hp-body{padding:12px 16px 18px;font-size:13px;color:var(--t2)}
+.hp-grid{display:grid;grid-template-columns:120px 1fr;gap:7px 12px;margin:4px 0 14px}
+.hp-grid dt{color:var(--t3)}
+.hp-grid dd{margin:0;color:var(--t1);font-family:var(--f-mono);font-size:12px;word-break:break-all}
+.hp-err{list-style:none;margin:6px 0 0;padding:0}
+.hp-err li{padding:5px 8px;border-left:2px solid var(--fig);background:var(--s1);margin-bottom:4px;font-family:var(--f-mono);font-size:11.5px;color:var(--t2)}
+.toast{position:fixed;left:50%;bottom:96px;transform:translateX(-50%);background:var(--s3);color:var(--t1);padding:8px 14px;border-radius:999px;font-size:13px;z-index:90;box-shadow:0 8px 24px rgba(0,0,0,.25);opacity:1;transition:opacity .3s}
+.toast.out{opacity:0}
 </style>
 </head>
 <body>
@@ -680,6 +732,8 @@ button.stp-h:hover{background:var(--hov)}
       <span class="right">
         <span class="st-word" id="thSt" hidden><i></i><span id="thStT"></span></span>
         <button class="vb-btn" id="vbBtn" title="信息密度：详细 = 组头 + 每条单行；紧凑 = 只留结论 + 一行统计">详细</button>
+        <button class="vb-btn" id="palBtn" title="命令面板（Ctrl/Cmd+K）">命令</button>
+        <button class="vb-btn" id="diagBtn" title="健康检查与诊断包（daemon 心跳 / runs / 磁盘 / 最近错误）">诊断</button>
         <button class="icon-btn" id="themeBtn" aria-label="切换主题">
           <svg class="i-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
           <svg class="i-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z"/></svg>
@@ -1028,7 +1082,7 @@ function tnodeHtml(n, last, lvl, has){
   lvl = lvl || n.l;
   return '<div class="tnode l'+lvl+(last?" last":"")+(n.live?" live":"")+'" data-nm="'+esc(n.nm)+'">'+
     '<button class="tn-row"><span class="dot '+esc(n.st)+(has?' x':'')+'"></span>'+
-    '<span class="tn-main"><span class="tn-t"><span class="nm">'+esc(n.nm)+'</span></span>'+
+    '<span class="tn-main"><span class="tn-t"><span class="nm">'+esc(n.nm)+'</span>'+sevBadge(n.sev)+'</span>'+
     '<span class="tn-d">'+esc(n.d||"")+'</span></span>'+stWord(n)+'</button>'+
     '<button class="tn-go" aria-label="查看详情">'+CHEV+'</button>'+
     (n.live?'<button class="tn-x" title="中止该节点" aria-label="中止该节点">×</button>':"")+'</div>';
@@ -1066,6 +1120,10 @@ function renderRun(silent){
   if(r.sum) h += conclHtml(r);
   /* ③ 验收条：一行折叠条，点开才是 accept 清单 + 子代理 DAG（P3） */
   h += aclStripHtml(r);
+  /* S23：计划条（过程组上方一行；当前项高亮，点开看全量） */
+  h += planHtml(r);
+  /* S23/S26：reviewer 裁决强度 + 审计对（可点开） */
+  h += sevRowHtml(r);
   /* ④ 过程：详细 = 组头 + 每条单行；紧凑 = 一行 N 步 / M 秒 / Σtok（P14） */
   h += (VERB === "compact") ? miniHtml(r) : timelineHtml(r);
   /* ⑤ 结局 / 等待：一行 shimmer + 工具名 + 已用时（P8），等工作时不假装在跑 */
@@ -1079,8 +1137,10 @@ function renderRun(silent){
   else{ ts.scrollTop = atBottom ? ts.scrollHeight : oldTop; }  /* 静默刷新不打扰阅读位置 */
   bindAcl();
   bindGroup();
+  bindPlan();
   bindTreeRows();
   bindStepRows("#threadScroll", r.id, "root");
+  bindDiffs("#threadScroll");
   syncComposer();   /* 切 run 可能换掉"当前审批"：输入框语义跟着走（P11） */
 }
 /* P3：验收条的折叠态（localStorage 记住；默认折叠 = 一行） */
@@ -1294,7 +1354,8 @@ function statsLine(st){
 /* run 详情的工具区：组头统计 +（点开）每条单行摘要。没有工具调用就不占位。 */
 function timelineHtml(r){
   var steps = Array.isArray(r.steps) ? r.steps : [];
-  if(!steps.length) return "";
+  var diffs = Array.isArray(r.diffs) ? r.diffs : [];
+  if(!steps.length && !diffs.length) return "";
   var groups = Array.isArray(r.groups) ? r.groups : [];
   var stats = statsLine(r.stats) || (steps.length + " 步");
   var body;
@@ -1307,8 +1368,10 @@ function timelineHtml(r){
         '<ol class="steps">'+arr.map(function(s){ return stepHtml(s, r.id); }).join("")+'</ol>';
     }).join("");
   }else{
-    body = '<ol class="steps">'+steps.map(function(s){ return stepHtml(s, r.id); }).join("")+'</ol>';
+    body = steps.length ? '<ol class="steps">'+steps.map(function(s){ return stepHtml(s, r.id); }).join("")+'</ol>' : "";
   }
+  /* S18：文件变更跟在工具步骤后面（同一个过程组内，「文件名 +N −M」一行，点开看 diff） */
+  body += diffsHtml(r);
   return '<div class="tlx"><button class="tlx-h" id="tlxH" aria-expanded="'+(groupOpen?"true":"false")+'">'+
     '<b>过程</b><span class="stats">'+esc(stats)+'</span>'+
     '<span class="hint">'+(groupOpen?"点收起":"点展开每条")+'</span>'+CHEV+
@@ -1931,7 +1994,326 @@ syncComposer();
    否则 WebView2 一开窗就弹权限框，像 bug 一样打断人。 */
 fetchView();
 connectSSE();
+
+/* ================= S18：文件变更（diff） ================= */
+var openDiffs = {};   /* runId|file → 1：静默刷新后展开态不塌 */
+function sevLabel(s){ return ({note:"备注", warn:"警告", block:"阻断"})[s] || s; }
+function sevBadge(s){
+  if(!s) return "";
+  return '<span class="sev-badge sev-'+esc(s)+'">'+esc(sevLabel(s))+'</span>';
+}
+function diffCls(l){
+  if(/^(\+\+\+|---|@@)/.test(l)) return "ln-hd";
+  if(/^\+/.test(l)) return "ln-add";
+  if(/^-/.test(l)) return "ln-del";
+  return "";
+}
+function diffsHtml(r){
+  var ds = (r && Array.isArray(r.diffs)) ? r.diffs : [];
+  if(!ds.length) return "";
+  return '<div class="dffs">'+ds.map(function(d){
+    var key = String(r.id)+"|"+d.file;
+    var open = !!openDiffs[key];
+    var bodyHtml;
+    if(!d.patch){
+      /* P13/P12：拿不到 patch 就只报文件级统计，不补造行内容 */
+      bodyHtml = '<div class="dff-note">事件里只有文件级统计（+'+d.add+' −'+d.del+'），没有 diff 正文 —— 不补造行内容。</div>';
+    }else{
+      var shown = d.patch.slice(0, 40);
+      var rest = Math.max(0, (d.total||0) - shown.length);
+      bodyHtml = '<pre class="dff-b">'+shown.map(function(l){
+        var c = diffCls(l);
+        return (c? '<span class="'+c+'">' : "<span>") + esc(l) + "</span>";
+      }).join("\n")+'</pre>'+
+      (rest ? '<div class="dff-foot">还有 '+rest+' 行 · patch 共 '+(d.total||0)+' 行'+(d.truncated? "（视图只带前 60 行）":"")+'</div>' : "");
+    }
+    return '<div class="dff"><button class="dff-h" data-dk="'+esc(key)+'" aria-expanded="'+(open?"true":"false")+'">'+
+      '<span class="dfile">'+esc(d.file)+'</span>'+
+      '<span class="add">+'+d.add+'</span><span class="del">−'+d.del+'</span>'+
+      (d.hunks ? '<span class="hint">'+d.hunks+' 段</span>' : "")+
+      '<span class="hint">'+(open?"收起":"点开看 diff")+'</span></button>'+
+      '<div class="dff-body"'+(open?"":" hidden")+'>'+bodyHtml+'</div></div>';
+  }).join("")+'</div>';
+}
+function bindDiffs(sel){
+  each((sel||"")+" .dff-h", function(el){
+    el.addEventListener("click", function(){
+      var k = el.dataset.dk; if(!k) return;
+      openDiffs[k] = !openDiffs[k];
+      el.setAttribute("aria-expanded", openDiffs[k] ? "true" : "false");
+      var body = el.parentElement.querySelector(".dff-body");
+      if(body) body.hidden = !openDiffs[k];
+      var hints = el.querySelectorAll(".hint");
+      if(hints.length) hints[hints.length-1].textContent = openDiffs[k] ? "收起" : "点开看 diff";
+    });
+  });
+}
+
+/* ================= S23：计划条 + 裁决强度 + 审计对 ================= */
+var planOpen = false;
+function planHtml(r){
+  var p = r && r.plan;
+  if(!p || !Array.isArray(p.items) || !p.items.length) return "";
+  var doneN = p.items.filter(function(i){ return i && i.done; }).length;
+  var cur = (p.current != null && p.items[p.current]) ? p.items[p.current] : null;
+  return '<div class="planbar"><b>计划</b>'+
+    '<span class="cur">'+esc(cur ? cur.text : "全部完成")+'</span>'+
+    '<span class="num">'+doneN+'/'+p.items.length+'</span>'+
+    '<button class="hint" id="planTog" aria-expanded="'+(planOpen?"true":"false")+'">'+(planOpen?"收起":"全部")+'</button></div>'+
+    '<div class="planbody" id="planBody"'+(planOpen?"":" hidden")+'><ol>'+p.items.map(function(it,i){
+      return '<li class="'+(it.done?"done":"")+(p.current===i?" cur":"")+'">'+(it.done?"✓ ":"○ ")+esc(it.text)+'</li>';
+    }).join("")+'</ol></div>';
+}
+function sevRowHtml(r){
+  if(!r || !r.sev) return "";
+  var list = Array.isArray(r.audits) ? r.audits : [];
+  var pend = list.filter(function(a){ return a && !a.decision; }).length;
+  var h = '<div class="sevrow sev-'+esc(r.sev)+'"><b>裁决 · '+esc(sevLabel(r.sev))+'</b>'+
+    '<span>'+list.length+' 条审批'+(pend?' · '+pend+' 条未答':"")+'</span>';
+  if(list.length) h += '<button class="hint" id="audTog" aria-expanded="false">看审计</button>';
+  h += '</div>';
+  if(list.length){
+    h += '<div class="planbody" id="audBody" hidden><ol>'+list.map(function(a){
+      var q = String(a.question||"").slice(0,90);
+      var d = a.decision === "invalid-answer" ? "回答无效，请重答"
+        : a.decision ? (a.decision + (a.ms!=null ? " · "+(a.ms/1000).toFixed(1)+"s" : "")) : "未答（挂起中）";
+      return '<li><span class="mono">'+esc(a.node||"root")+'</span> · '+esc(q)+' → <b>'+esc(d)+'</b></li>';
+    }).join("")+'</ol></div>';
+  }
+  return h;
+}
+function bindPlan(){
+  var b = $("#planTog");
+  if(b) b.addEventListener("click", function(){
+    planOpen = !planOpen;
+    b.setAttribute("aria-expanded", planOpen ? "true" : "false");
+    b.textContent = planOpen ? "收起" : "全部";
+    var body = $("#planBody"); if(body) body.hidden = !planOpen;
+  });
+  var a = $("#audTog");
+  if(a) a.addEventListener("click", function(){
+    var on = a.getAttribute("aria-expanded") !== "true";
+    a.setAttribute("aria-expanded", on ? "true" : "false");
+    a.textContent = on ? "收起审计" : "看审计";
+    var body = $("#audBody"); if(body) body.hidden = !on;
+  });
+}
+
+/* ================= S26：健康页 + 诊断包 ================= */
+var hpTrigger = null;
+function openHealth(trigger){
+  hpTrigger = trigger || document.activeElement;
+  var el = $("#health"); if(!el) return;
+  el.hidden = false;
+  renderHealth();
+  setTimeout(function(){ var b = $("#hpClose"); if(b) b.focus(); }, 0);
+}
+function closeHealth(){
+  var el = $("#health"); if(!el || el.hidden) return;
+  el.hidden = true;
+  try{ if(hpTrigger && hpTrigger.focus) hpTrigger.focus(); }catch(e){}
+}
+function renderHealth(){
+  var body = $("#hpBody"); if(!body) return;
+  body.innerHTML = '<div class="hint">读取中…</div>';
+  fetch("/api/health").then(function(r){ return r.json(); }).then(function(d){
+    var dl = function(k,v){ return '<dt>'+esc(k)+'</dt><dd>'+esc(String(v))+'</dd>'; };
+    var dm = d.daemon || {};
+    var errs = (d.errors||[]).length
+      ? '<ul class="hp-err">'+d.errors.map(function(e){ return '<li>'+esc((e.at||"")+"  "+e.event+"  "+e.detail)+'</li>'; }).join("")+'</ul>'
+      : '<div class="hint">没有最近的错误记录</div>';
+    body.innerHTML = '<dl class="hp-grid">'+
+      dl("版本", (d.version||"?")+"  ·  node "+(d.node||"?"))+
+      dl("端口", d.port)+
+      dl("桥", "pid "+d.pid+" · 已运行 "+d.uptime_s+"s · RSS "+d.rss_mb+" MB")+
+      dl("daemon", (dm.running?"在跑":"没在跑")+(dm.pid?" · pid "+dm.pid:"")+(dm.heartbeat_age_ms!=null?" · 心跳 "+Math.round(dm.heartbeat_age_ms/1000)+"s 前":""))+
+      dl("state", (d.state||{}).dir)+
+      dl("runs", (d.state||{}).runs+" 个（进行 "+(d.state||{}).active+" · 完成 "+(d.state||{}).done+" · 失败 "+(d.state||{}).failed+"）")+
+      dl("磁盘", (d.disk && d.disk.free_gb!=null ? "剩 "+d.disk.free_gb+" GB / 共 "+d.disk.total_gb+" GB" : "未知"))+
+      dl("视图缓存", "命中 "+(d.view_cache||{}).hits+" · 未命中 "+(d.view_cache||{}).misses+" · 条目 "+(d.view_cache||{}).size)+
+      '</dl><div class="sh-sec">最近错误</div>'+errs;
+    var t = $("#hpTime"); if(t) t.textContent = new Date().toLocaleTimeString();
+  }).catch(function(e){
+    body.innerHTML = '<div class="hint">健康检查失败：'+esc(String(e))+'</div>';
+  });
+}
+function copyDiag(){
+  var btn = $("#hpDiag"); if(!btn) return;
+  var rid = (RUNS[currentRun]||{}).id || "";
+  btn.disabled = true;
+  fetch("/api/diag" + (rid ? "?run="+encodeURIComponent(rid) : "")).then(function(r){ return r.text(); }).then(function(txt){
+    var done = function(ok){
+      btn.disabled = false;
+      btn.textContent = ok ? "已复制 ✓" : "复制失败（已弹窗）";
+      setTimeout(function(){ btn.textContent = "复制诊断包"; }, 1800);
+    };
+    if(navigator.clipboard && navigator.clipboard.writeText){
+      navigator.clipboard.writeText(txt).then(function(){ done(true); }, function(){ try{ window.prompt("复制诊断包", txt.slice(0,4000)); }catch(e){} done(false); });
+    }else{
+      try{ window.prompt("复制诊断包", txt.slice(0,4000)); }catch(e){}
+      done(false);
+    }
+  }).catch(function(){ btn.disabled = false; btn.textContent = "复制诊断包"; });
+}
+
+/* ================= S24：命令面板 + 快捷键 ================= */
+var palOpen = false, palItems = [], palSel = 0, palTrigger = null;
+function focusFirstApproval(){
+  var card = document.querySelector("#pane-inbox .incard:not(.res):not(.gone)");
+  if(!card) return false;
+  try{ switchPane("inbox"); }catch(e){}
+  var b = card.querySelector("button.opt");
+  if(b){ b.focus(); try{ b.scrollIntoView({block:"center"}); }catch(e){} }
+  return true;
+}
+function palActions(){
+  var acts = [];
+  RUNS.forEach(function(r,i){
+    acts.push({ label:"打开任务："+(r.title||r.id), sub:(r.agg||r.status||""), go:function(){ selectRun(i); } });
+  });
+  acts.push({ label:"信息密度：切换详细 / 紧凑（当前："+(VERB==="compact"?"紧凑":"详细")+"）", sub:"V", go:function(){ var b=$("#vbBtn"); if(b) b.click(); } });
+  acts.push({ label:"打开首个待裁决项", sub:"A", go:function(){ if(!focusFirstApproval()) toast("当前没有待裁决项"); } });
+  acts.push({ label:"派发新任务（聚焦输入框）", sub:"/", go:function(){ var c=$("#cText"); if(c) c.focus(); } });
+  acts.push({ label:"健康检查 / 诊断包", sub:"D", go:function(){ openHealth($("#palBtn")); } });
+  return acts;
+}
+function renderPalette(q){
+  var all = palActions();
+  var qq = String(q||"").trim().toLowerCase();
+  palItems = qq ? all.filter(function(it){ return (it.label+" "+(it.sub||"")).toLowerCase().indexOf(qq) >= 0; }) : all;
+  if(palSel >= palItems.length) palSel = Math.max(0, palItems.length-1);
+  var list = $("#palList"); if(!list) return;
+  list.innerHTML = palItems.length
+    ? palItems.map(function(it,i){
+        return '<div class="pal-it'+(i===palSel?" sel":"")+'" data-i="'+i+'"><span>'+esc(it.label)+'</span>'+(it.sub?'<span class="k">'+esc(it.sub)+'</span>':"")+'</div>';
+      }).join("")
+    : '<div class="pal-it">没有匹配的命令</div>';
+  each("#palList .pal-it", function(el){
+    el.addEventListener("click", function(){ var i = +el.dataset.i; if(!isNaN(i)) runPalItem(palItems[i]); });
+  });
+}
+function openPalette(trigger){
+  palTrigger = trigger || document.activeElement;
+  var el = $("#pal"); if(!el) return;
+  el.hidden = false; palOpen = true; palSel = 0;
+  var inp = $("#palIn"); if(inp) inp.value = "";
+  renderPalette("");
+  setTimeout(function(){ if(inp) inp.focus(); }, 0);
+}
+function closePalette(){
+  var el = $("#pal"); if(!el || el.hidden) return;
+  el.hidden = true; palOpen = false;
+  try{ if(palTrigger && palTrigger.focus) palTrigger.focus(); }catch(e){}
+}
+function runPalItem(it){
+  if(!it) return;
+  closePalette();
+  try{ it.go(); }catch(e){ toast("执行失败："+String(e).slice(0,80)); }
+}
+function moveRun(d){
+  if(!RUNS.length) return;
+  var i = (currentRun + d + RUNS.length) % RUNS.length;
+  selectRun(i);
+}
+function doFirstApproval(kind){
+  var el = document.querySelector("#pane-inbox .incard:not(.res):not(.gone)");
+  if(!el){ toast("当前没有待裁决项"); return; }
+  var btns = el.querySelectorAll("button.opt");
+  if(!btns.length) return;
+  var target = null;
+  Array.prototype.forEach.call(btns, function(b){
+    var t = b.textContent || "";
+    if(kind === "allow" && !target && /允许一次/.test(t)) target = b;
+    if(kind === "reject" && !target && /拒绝/.test(t)) target = b;
+  });
+  if(!target) target = btns[kind === "allow" ? 0 : btns.length-1];
+  target.click();
+}
+function toast(msg){
+  var el = document.createElement("div");
+  el.className = "toast"; el.textContent = msg;
+  document.body.appendChild(el);
+  setTimeout(function(){ el.classList.add("out"); }, 1200);
+  setTimeout(function(){ try{ el.remove(); }catch(e){} }, 1700);
+}
+function isTyping(e){
+  var t = e.target;
+  return !!t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable);
+}
+function layerOpen(){
+  var sheet = $("#sheet"), hp = $("#health");
+  return palOpen || (hp && !hp.hidden) || (sheet && !sheet.hidden);
+}
+document.addEventListener("keydown", function(e){
+  var mod = e.ctrlKey || e.metaKey;
+  if(mod && (e.key === "k" || e.key === "K")){
+    e.preventDefault();
+    if(palOpen) closePalette(); else openPalette($("#palBtn"));
+    return;
+  }
+  if(e.key === "Escape"){
+    if(palOpen){ e.preventDefault(); closePalette(); return; }
+    var hp = $("#health");
+    if(hp && !hp.hidden){ e.preventDefault(); closeHealth(); return; }
+    return;                       /* 其余交给已有的 Esc 处理（关 sheet）——关层 ≠ 批准 */
+  }
+  if(isTyping(e) || palOpen || layerOpen()) return;
+  var k = e.key;
+  if(k === "j" || k === "J"){ e.preventDefault(); moveRun(1); return; }
+  if(k === "k" || k === "K"){ e.preventDefault(); moveRun(-1); return; }
+  if(k === "a" || k === "A"){ e.preventDefault(); doFirstApproval("allow"); return; }
+  if(k === "r" || k === "R"){ e.preventDefault(); doFirstApproval("reject"); return; }
+  if(k === "/"){ e.preventDefault(); var c = $("#cText"); if(c) c.focus(); return; }
+  if(k === "d" || k === "D"){ e.preventDefault(); openHealth($("#diagBtn")); return; }
+});
+/* 元素绑定放到 DOMContentLoaded：面板/健康页的节点在本脚本之后才出现 */
+function bindChrome(){
+  var palBtn = $("#palBtn"), diagBtn = $("#diagBtn");
+  if(palBtn) palBtn.addEventListener("click", function(){ openPalette(this); });
+  if(diagBtn) diagBtn.addEventListener("click", function(){ openHealth(this); });
+  var hpClose = $("#hpClose"), hpRefresh = $("#hpRefresh"), hpDiag = $("#hpDiag");
+  if(hpClose) hpClose.addEventListener("click", closeHealth);
+  if(hpRefresh) hpRefresh.addEventListener("click", renderHealth);
+  if(hpDiag) hpDiag.addEventListener("click", copyDiag);
+  var pal = $("#pal"), hp = $("#health");
+  if(pal) pal.addEventListener("click", function(e){ if(e.target === this) closePalette(); });
+  if(hp) hp.addEventListener("click", function(e){ if(e.target === this) closeHealth(); });
+  var palIn = $("#palIn");
+  if(palIn){
+    palIn.addEventListener("input", function(){ palSel = 0; renderPalette(this.value); });
+    palIn.addEventListener("keydown", function(e){
+      if(e.key === "ArrowDown"){ e.preventDefault(); palSel = Math.min(palSel+1, Math.max(0,palItems.length-1)); renderPalette(this.value); }
+      else if(e.key === "ArrowUp"){ e.preventDefault(); palSel = Math.max(0, palSel-1); renderPalette(this.value); }
+      else if(e.key === "Enter"){ e.preventDefault(); runPalItem(palItems[palSel]); }
+    });
+  }
+}
+if(document.readyState === "loading") document.addEventListener("DOMContentLoaded", bindChrome);
+else bindChrome();
+
+
 </script>
+<!-- ================= S24：命令面板 ================= -->
+<div class="ov" id="pal" hidden>
+  <div class="pal" role="dialog" aria-modal="true" aria-label="命令面板">
+    <input id="palIn" placeholder="搜任务 / 切详细紧凑 / 打开审批 / 派发 / 诊断…" autocomplete="off" spellcheck="false">
+    <div class="pal-list" id="palList"></div>
+    <div class="pal-foot"><span>↑↓ 选择 · Enter 执行 · Esc 关闭（关闭 ≠ 批准）</span></div>
+  </div>
+</div>
+
+<!-- ================= S26：健康检查页 ================= -->
+<div class="ov" id="health" hidden>
+  <div class="hp" role="dialog" aria-modal="true" aria-label="健康检查">
+    <header><b>健康检查</b><span class="hp-time" id="hpTime"></span>
+      <button class="opt" id="hpDiag">复制诊断包</button>
+      <button class="opt" id="hpRefresh">刷新</button>
+      <button class="opt solid" id="hpClose">关闭</button>
+    </header>
+    <div class="hp-body" id="hpBody"></div>
+  </div>
+</div>
+
 </body>
 </html>
 

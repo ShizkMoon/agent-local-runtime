@@ -4,12 +4,12 @@
 // 无依赖（node:http + node:fs + node:child_process），供 Edge --app 壳使用；
 // 接口面保持稳定，日后 Tauri 壳只换窗口层、不动此桥。
 import { createServer } from "node:http";
-import { existsSync, readdirSync, readFileSync, statSync, watch, appendFileSync, mkdirSync, openSync, rmSync, writeFileSync, renameSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync, watch, appendFileSync, mkdirSync, openSync, rmSync, writeFileSync, renameSync, statfsSync } from "node:fs";
 import { join, normalize, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFile, execFileSync, spawn, type ChildProcess } from "node:child_process";
 // S16：视图投影住在 view.ts（纯函数，runsDir 由参数传入）；本文件只做 HTTP 胶水
-import { buildView, okId, badSeg, readJson, safeJoinIn, nodePaths, nodeStatus, evHint, runPulse } from "./view.ts";
+import { buildView, okId, badSeg, readJson, safeJoinIn, nodePaths, nodeStatus, evHint, runPulse, viewCacheStats, clearViewCache, approvalState } from "./view.ts";
 // S19：审批决策闭集由 gate.ts 持有（唯一真相），桥只做校验与落盘
 import { GATE_DECISIONS } from "../aica-pi/extensions/gate.ts";
 // S21：事件增量读与 fork 复用 runs.ts 的唯一实现（seq 语义只在一处定义）
@@ -140,8 +140,25 @@ function apiArtifact(res: any, rootId: string, path: string, name: string): void
 // ---- /api/v1/view：workbench 视图投影（run 卡片 + 树 + 收件箱 inbox + 已完结 settled）----
 // S16：投影本体在 view.ts::buildView（纯函数，runsDir 由参数传入，时间可注入）——
 // 本函数只剩 HTTP 胶水，改投影只动 view.ts，不动路由。
+// S26：/api/v1/view 的序列化缓存。500 run 的 view 有 5MB+，每次重新 stringify
+// 才是 HTTP 热路径的瓶颈；同一窗口直接回上一份字节（写入/清理都会先作废它）。
+let viewText: { at: number; text: string } | null = null;
+const VIEW_TEXT_TTL = 500;
+function invalidateView(): void { viewText = null; clearViewCache(); }
+
+function sendViewJson(res: any, text: string): void {
+  res.writeHead(200, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
+  res.end(text);
+}
+
 function apiView(res: any): void {
-  json(res, 200, buildView(RUNS));
+  const now = Date.now();
+  if (viewText && now - viewText.at < VIEW_TEXT_TTL) return sendViewJson(res, viewText.text);
+  // 指纹窗口 3s；runs/ 有落盘时 watcher 会先 invalidateView()（见 SSE 段）
+  const payload = buildView(RUNS, { statTtl: 3000 });
+  const text = JSON.stringify(payload);
+  viewText = { at: Date.now(), text };
+  sendViewJson(res, text);
 }
 
 // ---- ar CLI 桥：dispatch / reply / daemon ----
@@ -203,6 +220,164 @@ function apiDaemon(res: any): void {
   json(res, 200, { running: daemonRunning(), cli: AR_CLI, spawned: daemonProc?.pid ?? null });
 }
 
+// ---------------------------------------------------------------- S26：健康 / 诊断包
+
+const VERSION: string = (() => {
+  try { return JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version ?? "0.0.0"; }
+  catch { return "0.0.0"; }
+})();
+const STARTED_AT = Date.now();
+
+/** 读文件末尾 n 行（只读最后 96KB，日志再大也不整读） */
+function tailLines(file: string, n: number): string[] {
+  try {
+    if (!existsSync(file)) return [];
+    const fd = readFileSync(file);
+    const buf = fd.subarray(Math.max(0, fd.length - 96 * 1024)).toString("utf8");
+    return buf.split("\n").filter((l) => l.trim()).slice(-n);
+  } catch { return []; }
+}
+
+/** 最近错误：runs/index.jsonl 里 daemon_error / budget_exceeded 之类的记录（新→旧） */
+function recentErrors(limit = 10): { at: string | null; event: string; detail: string }[] {
+  const out: { at: string | null; event: string; detail: string }[] = [];
+  for (const l of tailLines(join(RUNS, "index.jsonl"), 600).reverse()) {
+    let e: any;
+    try { e = JSON.parse(l); } catch { continue; }
+    const ev = String(e?.event ?? "");
+    if (!/error|failed|exceeded|exhausted/i.test(ev)) continue;
+    out.push({ at: e?.ts ?? null, event: ev, detail: JSON.stringify(e).slice(0, 300) });
+    if (out.length >= limit) break;
+  }
+  return out;
+}
+
+function diskInfo(): { free_gb: number | null; total_gb: number | null; error?: string } {
+  try {
+    const s: any = statfsSync(STATE);
+    const unit = Number(s.bsize) || 0;
+    return { free_gb: +(((Number(s.bavail) || 0) * unit) / 1e9).toFixed(1), total_gb: +(((Number(s.blocks) || 0) * unit) / 1e9).toFixed(1) };
+  } catch (e) { return { free_gb: null, total_gb: null, error: String(e).slice(0, 120) }; }
+}
+
+/** 一个 run 里有没有 live worker（只看节点目录里有没有 worker.json，不读内容） */
+function runIsActive(rootId: string): boolean {
+  const nodesRoot = join(RUNS, rootId, "nodes");
+  if (!existsSync(nodesRoot)) return false;
+  try {
+    for (const ent of readdirSync(nodesRoot, { withFileTypes: true })) {
+      if (!ent.isDirectory()) continue;
+      if (existsSync(join(nodesRoot, ent.name, "worker.json"))) return true;
+    }
+  } catch { /* 读不动就当没在跑 */ }
+  return false;
+}
+
+function apiHealth(res: any): void {
+  const dirs = existsSync(RUNS)
+    ? readdirSync(RUNS, { withFileTypes: true }).filter((d) => d.isDirectory() && okId(d.name)).map((d) => d.name)
+    : [];
+  let active = 0, failed = 0, done = 0;
+  for (const id of dirs) {
+    if (runIsActive(id)) { active += 1; continue; }
+    const root = readJson<any>(join(RUNS, id, "nodes", "root", "result.json"));
+    if (root?.status === "failed") failed += 1;
+    else if (root?.status === "done") done += 1;
+  }
+  let daemon: { running: boolean; pid: number | null; heartbeat_age_ms: number | null } = { running: false, pid: null, heartbeat_age_ms: null };
+  try {
+    const [pid, ts] = readFileSync(join(STATE, "daemon.pid"), "utf8").trim().split(/\s+/).map(Number);
+    if (pid > 0) daemon = { running: daemonRunning(), pid, heartbeat_age_ms: Number.isFinite(ts) ? Date.now() - ts : null };
+  } catch { daemon.running = daemonRunning(); }
+  const mem = process.memoryUsage();
+  json(res, 200, {
+    ok: true,
+    version: VERSION,
+    pid: process.pid,
+    node: process.version,
+    port: PORT,
+    uptime_s: Math.round((Date.now() - STARTED_AT) / 1000),
+    daemon,
+    state: { dir: STATE, runs: dirs.length, active, done, failed },
+    disk: { ...diskInfo(), state_dir: STATE },
+    rss_mb: +(mem.rss / 1048576).toFixed(1),
+    view_cache: viewCacheStats(),
+    errors: recentErrors(),
+  });
+}
+
+/** 复制诊断包：版本 + 最近 200 行日志 + 最近事件（纯文本，前端直接进剪贴板） */
+function apiDiag(res: any, runId: string | null): void {
+  const logs = [
+    ...tailLines(join(STATE, "daemon.log"), 120).map((l) => `[daemon] ${l}`),
+    ...tailLines(join(RUNS, "index.jsonl"), 80).map((l) => `[index] ${l}`),
+  ].slice(-200);
+  const evs: string[] = [];
+  if (runId && okId(runId)) {
+    try {
+      const r = readEventsSince(runId, "root", 0);
+      for (const e of r.events.slice(-30)) evs.push(`[${e.seq ?? "-"}] ${e.ts ?? ""} ${e.kind} ${JSON.stringify(e.data).slice(0, 300)}`);
+    } catch { /* 读不到事件不阻塞诊断包 */ }
+  }
+  const lines = [
+    `aica workbench 诊断包`,
+    `version: ${VERSION}   node: ${process.version}   port: ${PORT}`,
+    `state: ${STATE}`,
+    `time: ${new Date().toISOString()}`,
+    `--- logs (${logs.length}) ---`,
+    ...logs,
+    `--- events${runId ? ` · run ${runId}` : ""} (${evs.length}) ---`,
+    ...evs,
+  ];
+  res.writeHead(200, { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" });
+  res.end(lines.join("\n") + "\n");
+}
+
+// ---------------------------------------------------------------- S28：proposals 路由（模块由另一个实现者提供）
+
+let proposalsMod: any;
+async function proposalsApi(): Promise<any | null> {
+  if (proposalsMod !== undefined) return proposalsMod;
+  try { proposalsMod = await import("../src/proposals.ts"); } catch { proposalsMod = null; }
+  return proposalsMod;
+}
+function notReady(res: any): void {
+  json(res, 501, { error: "proposals 未就绪", hint: "src/proposals.ts 还没有导出 listProposals/applyProposal/rejectProposal", ok: false });
+}
+function readBody(req: any, cap = 64 * 1024): Promise<string> {
+  return new Promise((resolve) => {
+    let body = "";
+    req.on("data", (c: Buffer) => { body += c; if (body.length > cap) req.destroy(); });
+    req.on("end", () => resolve(body));
+    req.on("error", () => resolve(body));
+  });
+}
+
+async function apiProposalsList(res: any): Promise<void> {
+  const mod = await proposalsApi();
+  if (!mod || typeof mod.listProposals !== "function") return notReady(res);
+  try { json(res, 200, { ok: true, proposals: await mod.listProposals() }); }
+  catch (e) { json(res, 500, { ok: false, error: String(e).slice(0, 300) }); }
+}
+
+async function apiProposalAct(req: any, res: any, slug: string, act: "apply" | "reject"): Promise<void> {
+  const mod = await proposalsApi();
+  if (!mod) return notReady(res);
+  const fn = act === "apply" ? mod.applyProposal : mod.rejectProposal;
+  if (typeof fn !== "function") return notReady(res);
+  let body: any = {};
+  try { body = JSON.parse((await readBody(req)) || "{}"); } catch { body = {}; }
+  try {
+    const out = act === "apply"
+      ? await fn(slug, { force: !!body?.force })
+      : await fn(slug, typeof body?.reason === "string" ? body.reason : "");
+    if (out && typeof out === "object" && out.ok === false) {
+      return json(res, 409, { ...out, error: out.message ?? out.error ?? "proposal 未通过", ok: false });
+    }
+    json(res, 200, { ok: true, ...(out && typeof out === "object" ? out : { result: out }) });
+  } catch (e) { json(res, 409, { ok: false, error: String(e).slice(0, 300) }); }
+}
+
 /** POST /api/tasks {goal,...} → `ar dispatch`（stdin 收任务 JSON，内部 createRun+写根 spec）→ 确保 daemon */
 function apiTask(req: any, res: any): void {
   let body = "";
@@ -247,14 +422,38 @@ function apiReply(req: any, res: any, rootId: string, path: string): void {
   req.on("data", (c: Buffer) => { body += c; if (body.length > 64 * 1024) req.destroy(); });
   req.on("end", () => {
     try {
-      const { text } = JSON.parse(body || "{}");
+      const { text, mode } = JSON.parse(body || "{}");
       if (typeof text !== "string" || !text.trim()) return err(res, 400, "text required");
       // S19 / M4：有未答 gate 时，回复 = 拒绝 + 说明原因（写 gate-ans，不是新消息，也不调 ar reply）
-      const pend = pendingApproval(dir);
+      const pend = pendingApprovalReq(dir);
       if (pend) {
         const w = writeAnswer(dir, { decision: "rejected", feedback: text.trim() });
         if (w.ok) return json(res, 200, { ok: true, mode: "gate", decision: "rejected", gate: pend.call_id ?? null });
         return err(res, 500, w.error ?? "gate answer failed");
+      }
+      // S22：mode=interrupt = 先把话送进 spec.reply，再掐掉当前 worker，把 result 归档让节点回到 pending → 立刻重拉
+      if (mode === "interrupt") {
+        const rj = join(dir, "result.json");
+        const cur = readJson<any>(rj);
+        if (cur?.status === "done") return err(res, 409, "node already done（已完成没必要打断，直接 fork 重跑）");
+        execFile(process.execPath, [AR_CLI, "reply", "--run", rootId, "--node", path, "--text", text.trim()],
+          { env: arEnv(), timeout: 10_000, windowsHide: true, maxBuffer: 512 * 1024 },
+          (e, _o, stderr) => {
+            if (e) return err(res, 500, `ar reply: ${String(stderr || e).slice(0, 200)}`);
+            execFile(process.execPath, [AR_CLI, "abort", "--run", rootId, "--node", path],
+              { env: arEnv(), timeout: 20_000, windowsHide: true, maxBuffer: 512 * 1024 },
+              (e2, _o2, s2) => {
+                if (e2) return err(res, 500, `ar abort: ${String(s2 || e2).slice(0, 200)}`);
+                // 归档名用 result.resolved.json：pendingNodes 见它就把这次拉起算 resumed（带上 [恢复] 行）
+                let archived = false;
+                try {
+                  if (existsSync(rj)) { renameSync(rj, join(dir, "result.resolved.json")); archived = true; }
+                } catch { /* 归档失败就保持 failed，宁可不动也别吞掉 */ }
+                ensureDaemon();
+                json(res, 200, { ok: true, mode: "interrupt", archived, daemon: true });
+              });
+          });
+        return;
       }
       const mark = () => appendFileSync(join(dir, "reply.txt"),
         JSON.stringify({ ts: new Date().toISOString(), text }) + "\n", "utf8");
@@ -287,20 +486,11 @@ interface ApprovalReq {
   args?: unknown; targets?: string[]; opts?: ApprovalOpt[]; asked_at?: string;
 }
 
-/** 读未答的 gate-req：文件在、未超过 TTL、且没有「比 req 更新」的 gate-ans（旧 ans 是上一轮的残答） */
-function pendingApproval(dir: string): { req: ApprovalReq; age_ms: number } | null {
-  const file = join(dir, APPROVAL_REQ);
-  if (!existsSync(file)) return null;
-  let reqMs = 0;
-  try { reqMs = statSync(file).mtimeMs; } catch { return null; }
-  const ans = join(dir, APPROVAL_ANS);
-  if (existsSync(ans)) {
-    try { if (statSync(ans).mtimeMs >= reqMs) return null; } catch { /* ans 刚被清：当未答 */ }
-  }
-  const age = Date.now() - reqMs;
-  if (age > APPROVAL_TTL_MS) return null;
-  const req = readJson<ApprovalReq>(file);
-  return req && typeof req === "object" ? { req, age_ms: Math.max(0, Math.round(age)) } : null;
+/** 未答的 gate-req（判定单源在 view.ts::approvalState：ans 必须落闭集，坏 ans 仍算未答） */
+function pendingApprovalReq(dir: string): { req: ApprovalReq; age_ms: number } | null {
+  const st = approvalState(dir);
+  if (!st.pending || !st.req) return null;
+  return { req: st.req as ApprovalReq, age_ms: st.age_ms ?? 0 };
 }
 
 /** 写 gate-ans：decision 必须落闭集；remember 只认 gate 在 req.opts 里给过的 scope（opts[].scope，前端伪造无效） */
@@ -309,7 +499,7 @@ function writeAnswer(dir: string, body: any): { ok: boolean; code?: number; erro
   if (!(GATE_DECISIONS as readonly string[]).includes(decision)) {
     return { ok: false, code: 400, error: `decision 必须是闭集之一：${GATE_DECISIONS.join(" | ")}` };
   }
-  const pend = pendingApproval(dir);
+  const pend = pendingApprovalReq(dir);
   if (!pend) return { ok: false, code: 404, error: "没有待答的 gate-req（已答或已超时）" };
   const ans: any = { decision, by: "workbench", at: new Date().toISOString() };
   const feedback = typeof body?.feedback === "string" ? body.feedback.trim().slice(0, 2000) : "";
@@ -338,7 +528,7 @@ function apiApprovals(res: any): void {
       for (const p of nodePaths(RUNS, ent.name)) {
         const dir = safeJoin(ent.name, "nodes", ...p.split("/"));
         if (!dir) continue;
-        const pend = pendingApproval(dir);
+        const pend = pendingApprovalReq(dir);
         if (!pend) continue;
         const r = pend.req;
         approvals.push({
@@ -433,6 +623,7 @@ try {
     if (debounce) return;
     debounce = setTimeout(() => {
       const files = [...new Set(pending)].slice(0, 20); pending = []; debounce = null;
+      invalidateView();   // runs/ 有任何落盘 → 指纹/投影/JSON 缓存立刻作废（不靠时间窗口）
       const msg = `data: ${JSON.stringify({ type: "change", files })}\n\n`;
       for (const c of sseClients) { try { c.write(msg); } catch { sseClients.delete(c); } }
     }, 200);
@@ -471,6 +662,14 @@ const server = createServer((req, res) => {
     if (req.method === "GET" && p === "/api/v1/view") return apiView(res);
     if (req.method === "GET" && p === "/api/stream") return apiStream(req, res);
     if (req.method === "GET" && p === "/api/daemon") return apiDaemon(res);
+    if (req.method === "GET" && p === "/api/health") return apiHealth(res);
+    if (req.method === "GET" && p === "/api/diag") return apiDiag(res, url.searchParams.get("run"));
+    if (req.method === "GET" && p === "/api/proposals") return void apiProposalsList(res);
+    if (req.method === "POST" && (p.match(/^\/api\/proposals\/([^/]+)\/(apply|reject)$/) as RegExpMatchArray | null)) {
+      const pm = p.match(/^\/api\/proposals\/([^/]+)\/(apply|reject)$/)!;
+      if (!okId(pm[1])) return err(res, 400, "bad slug");
+      return void apiProposalAct(req, res, pm[1], pm[2] as "apply" | "reject");
+    }
     if (req.method === "GET" && p === "/api/approvals") return apiApprovals(res);
     if (req.method === "POST" && p === "/api/tasks") return apiTask(req, res);
     if (req.method === "DELETE" && p.match(/^\/api\/runs\/([^/]+)$/)) {
@@ -541,4 +740,6 @@ const server = createServer((req, res) => {
 });
 
 server.listen(PORT, HOST, () => console.log(`[workbench] http://${HOST}:${PORT}  runs=${RUNS}`));
+
+
 

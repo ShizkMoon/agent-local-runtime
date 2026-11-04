@@ -29,7 +29,11 @@
     "reason": null,
     "code": null
    },
-   "compactions": []
+   "compactions": [],
+   "diffs": [],
+   "plan": null,
+   "sev": null,
+   "audits": []
   }
  ],
  "inbox": [],
