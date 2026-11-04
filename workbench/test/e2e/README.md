@@ -6,7 +6,7 @@
 ## 跑法
 
 ```powershell
-node --test workbench/test/e2e                        # 全绿：37 pass / 6 skip（skip 都带理由，见下）
+node --test workbench/test/e2e                        # 全绿：38 pass / 5 skip（skip 都带理由，见下）
 $env:UPDATE_SNAPSHOTS='1'; node --test workbench/test/e2e   # 确认语义改动后重录投影快照
 $env:AICA_E2E_PERF_RUNS='200'; node --test workbench/test/e2e/perf.test.ts   # 缩小/放大性能样本
 $env:CHROME_PATH='C:\...\msedge.exe'                  # 指定浏览器（否则自动找 Edge/Chrome）
@@ -58,7 +58,7 @@ tools/make-approval-fixture.mjs  用真实 gate.ts 生成两个闸门夹具（�
 
 | 门 | 用例 |
 |---|---|
-| G-1 契约 | `gates.test.ts` · 15 个子命令都回 envelope（形状）；**严格态**（USAGE + 非 0 退出 + 无栈）当前未达标 → skip 并列出缺口 |
+| G-1 契约 | `gates.test.ts` · 15 个子命令都回 envelope（形状，恒绿）+ **严格态**（USAGE + 非 0 退出 + 无栈，现已达标）：谁把坏输入退回"exit 0 / FATAL 带栈"，这条立刻红（或 skip 并列出缺口） |
 | G-2 状态机 | `gates.test.ts` · 终止态不可覆写、`resolveWaiting` 只认 waiting、`patchResult` 是收尾通道；严格态（非法迁移主动报错）未实现 → skip |
 | G-3 恢复 | `gates.test.ts` · 孤儿归宿；`faults.test.ts` · killWorker / killDaemon×10 |
 | G-4 安全 | `gates.test.ts` · deny / deny_paths / rules / critical-path / restricted / 控制面 / grant 逃逸 / safeJoinIn / tier 未知按 exec |
@@ -94,7 +94,7 @@ tools/make-approval-fixture.mjs  用真实 gate.ts 生成两个闸门夹具（�
    `tools/make-approval-fixture.mjs` 在 `NODE_TEST_CONTEXT` 下不动夹具。
 5. **端口**：4487 被别的进程/测试占用时自动顺延；`expectRuns` 不匹配同样顺延（防止把别人的状态当自己的）。
 6. **夹具时间固定**：审批 TTL 是 10 分钟，走 HTTP 的用例先把 mtime 拨到"刚刚"（`touchRecent`）；回放用例用 `case.json.now` 钉死。
-7. 6 个 skip 全部带理由：4 个是"该夹具没有 `stdout.log`，转写器无输入"，2 个是 G-1/G-2 严格态未达标（信封形状本身是绿的）。
+7. 5 个 skip 全部带理由：4 个是"该夹具没有 `stdout.log`，转写器无输入"，1 个是 G-2 严格态未实现（非法迁移主动报错）。
 
 ## 设计依据
 

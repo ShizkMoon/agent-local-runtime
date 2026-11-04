@@ -2,6 +2,7 @@
  "runs": [
   {
    "id": "ef2706d6-2a3c",
+   "kind": null,
    "title": "smoke test",
    "status": "working",
    "agg": "working",

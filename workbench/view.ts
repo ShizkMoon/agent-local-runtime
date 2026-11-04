@@ -273,6 +273,8 @@ export interface TreeNodeView {
 
 export interface RunView {
   id: string;
+  /** run.json.kind：task / test / smoke…（P1：smoke/test 在左栏归到「测试」分组） */
+  kind: string | null;
   title: string;
   status: "done" | "input" | "failed" | "working";
   /** S25：run 行只能看这个 —— max(所有节点)，blocked > failed > working > done；done 不冒泡 */
@@ -1340,7 +1342,7 @@ function buildRunPart(runsDir: string, rootId: string, meta: any, now: number, s
     const agg = aggList.length ? aggMax(aggList) : "working";
     const rootSteps = rootNode?.steps ?? [];
     const view: RunView = {
-      id: rootId, title: meta?.subject ?? rootId, status,
+      id: rootId, kind: typeof meta?.kind === "string" ? meta.kind : null, title: meta?.subject ?? rootId, status,
       agg, agg_n: aggList.filter(a => a === agg).length,
       dur: mmss((ended ? Date.parse(ended) : now) - Date.parse(meta?.created_at ?? new Date(now).toISOString())),
       spent: spentTotal || null,
@@ -1382,6 +1384,46 @@ function runPulseFrom(nodes: NodeProj[]): { hint: string } | null {
   let best: any = null;
   for (const n of nodes) if (n.ev && (!best || n.ev.ts > best.ts)) best = n.ev;
   return best ? { hint: evHint(best) } : null;
+}
+
+// ---------------------------------------------------------------- R3：提案页签的读侧投影
+
+export interface ProposalDetail {
+  slug: string;
+  risk: string;
+  status: string;
+  created_at: string | null;
+  verify_cmd: string | null;
+  /** proposal.md 全文（UI 自己截断） */
+  proposal: string;
+  /** change.patch 全文（UI 交给 S18 的 diff 组件） */
+  patch: string;
+  meta: any;
+}
+
+/**
+ * 读一个提案目录的四件套（proposal.md / change.patch / verify.json / meta.json）。
+ * 缺文件就如实留空 —— 不编内容；目录不存在返回 null。
+ */
+export function proposalDetail(dir: string): ProposalDetail | null {
+  if (!dir || !existsSync(dir)) return null;
+  const meta = readJson<any>(join(dir, "meta.json"));
+  const verify = readJson<any>(join(dir, "verify.json"));
+  const read = (f: string): string => {
+    try { return readFileSync(join(dir, f), "utf8"); } catch { return ""; }
+  };
+  const slug = String(meta?.slug ?? dir.split(/[\\/]/).filter(Boolean).pop() ?? "");
+  if (!slug) return null;
+  return {
+    slug,
+    risk: String(meta?.risk ?? "low"),
+    status: String(meta?.status ?? "pending"),
+    created_at: typeof meta?.created_at === "string" ? meta.created_at : null,
+    verify_cmd: typeof verify?.cmd === "string" ? verify.cmd : null,
+    proposal: read("proposal.md"),
+    patch: read("change.patch"),
+    meta: meta ?? null,
+  };
 }
 
 

@@ -701,6 +701,31 @@ button.stp-h:hover{background:var(--hov)}
 .hp-err li{padding:5px 8px;border-left:2px solid var(--fig);background:var(--s1);margin-bottom:4px;font-family:var(--f-mono);font-size:11.5px;color:var(--t2)}
 .toast{position:fixed;left:50%;bottom:96px;transform:translateX(-50%);background:var(--s3);color:var(--t1);padding:8px 14px;border-radius:999px;font-size:13px;z-index:90;box-shadow:0 8px 24px rgba(0,0,0,.25);opacity:1;transition:opacity .3s}
 .toast.out{opacity:0}
+/* R3：测试分组 / 提案页签 */
+.sb-tog{display:flex;align-items:center;gap:6px;width:100%;padding:0;background:none;border:0;font:inherit;color:inherit;cursor:pointer;text-align:left}
+.sb-tog:hover{color:var(--t2)}
+.sb-tog .cnt{font-size:11px;color:var(--t3);font-variant-numeric:tabular-nums}
+.test-row{display:flex;align-items:center;gap:8px;width:100%;box-sizing:border-box;min-width:0;height:30px;padding:0 10px;border-radius:var(--r-ctl);font-size:13px;color:var(--t3);white-space:nowrap;cursor:pointer;background:none;border:0;text-align:left}
+.test-row:hover{background:var(--hov);color:var(--t1)}
+.test-row .t{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis}
+.test-row .tm{flex:none;font-family:var(--f-mono);font-size:11.5px;color:var(--t3)}
+.sub-path{flex:none;max-width:42%;overflow:hidden;text-overflow:ellipsis;font-family:var(--f-mono);font-size:11px;color:var(--t3)}
+.prop-item{display:flex;flex-direction:column;gap:4px;width:100%;text-align:left;padding:9px 10px;border:1px solid var(--ln);border-radius:var(--r-ctl);background:var(--s2);cursor:pointer}
+.prop-item:hover{border-color:var(--ln-hi);background:var(--s3)}
+.prop-item .p1{display:flex;align-items:center;gap:8px}
+.prop-item .slug{font-family:var(--f-mono);font-size:12.5px;color:var(--t1);overflow:hidden;text-overflow:ellipsis}
+.prop-item .p2{display:flex;align-items:center;gap:8px;font-size:11.5px;color:var(--t3)}
+.risk{display:inline-block;padding:0 6px;border-radius:5px;font-size:10.5px;line-height:17px;flex:none}
+.risk-low{background:var(--accent-soft);color:var(--t2)}
+.risk-medium{background:rgba(190,120,20,.15);color:var(--warn)}
+.risk-high{background:rgba(200,60,50,.15);color:var(--fig)}
+.st-pending{color:var(--t2)} .st-applied{color:var(--ok)} .st-rejected{color:var(--fig)} .st-stale{color:var(--t3)}
+.prop-sec{font-size:12px;color:var(--t3);margin:12px 0 4px}
+.prop-md{margin:0;padding:8px 10px;border:1px solid var(--ln);border-radius:var(--r-ctl);background:var(--s1);font-size:12.5px;line-height:1.6;color:var(--t2);white-space:pre-wrap;max-height:220px;overflow:auto}
+.prop-act{display:flex;gap:8px;align-items:center;margin-top:14px;flex-wrap:wrap}
+.prop-act input{flex:1;min-width:180px;padding:7px 10px;border:1px solid var(--ln);border-radius:var(--r-ctl);background:var(--s1);color:var(--t1);font:inherit;font-size:13px}
+.prop-act .opt[disabled]{opacity:.45;cursor:not-allowed}
+.prop-note{font-size:12px;color:var(--t3)}
 </style>
 </head>
 <body>
@@ -719,6 +744,11 @@ button.stp-h:hover{background:var(--hov)}
 
       <div class="sb-sec" id="secLive">进行中</div>
       <div id="runList"></div>
+
+      <div class="sb-sec" id="secTest" hidden>
+        <button class="sb-tog" id="testTog" aria-expanded="false">测试 <span class="cnt" id="testCnt">0</span></button>
+      </div>
+      <div id="testList" hidden></div>
 
       <div class="sb-sec">已结束</div>
       <div id="settledList"></div>
@@ -765,11 +795,13 @@ button.stp-h:hover{background:var(--hov)}
   <aside id="right">
     <div class="rp-tabs">
       <button class="rp-tab on" data-p="inbox">需要你 <span class="bdg" id="rpInboxBdg" hidden>0</span></button>
+      <button class="rp-tab" data-p="props">提案 <span class="bdg" id="rpPropsBdg" hidden>0</span></button>
       <button class="rp-tab" data-p="arts">产物</button>
       <button class="rp-tab" data-p="subs">子代理</button>
     </div>
     <div class="rp-body">
       <div class="rp-cells" id="pane-inbox"></div>
+      <div class="rp-pane" id="pane-props" hidden><div id="propDock"></div></div>
       <div class="rp-pane" id="pane-arts" hidden><div id="artDock"></div></div>
       <div class="rp-pane" id="pane-subs" hidden><div id="subDock"></div></div>
     </div>
@@ -996,10 +1028,17 @@ function runCardHtml(r,i){
     '<span class="ttl">'+esc(r.title)+'</span>'+
     '<span class="meta">'+esc(r.snippet)+'</span></button>';
 }
+/* R3/P1：smoke_ 前缀或 kind=test 的 run 归「测试」分组，不再混进「已结束」主列表 */
+function isTestRun(r){
+  if(!r) return false;
+  return /^smoke[-_]/i.test(String(r.title||"")) || /^smoke[-_]/i.test(String(r.snippet||"")) || r.kind === "test";
+}
+var testOpen = (function(){ try{ return localStorage.getItem("aica-v1-testgroup")==="1"; }catch(e){ return false; } })();
 function renderSidebar(){
   /* P5：按紧急度分三段 —— 等你 > 失败 > 进行中；done 沉到「已结束」，done 不冒泡 */
-  var wait = [], fail = [], live = [];
+  var wait = [], fail = [], live = [], testRuns = [];
   RUNS.forEach(function(r,i){
+    if(isTestRun(r)){ if(aggOf(r)!=='done') testRuns.push([r,i]); return; }   // done 的测试 run 由 SETTLED 统一收
     var a = aggOf(r);
     if(a === "done") return;
     if(a === "blocked") wait.push([r,i]);
@@ -1013,7 +1052,42 @@ function renderSidebar(){
   $("#secLive").hidden = !live.length;
   $("#runList").innerHTML = live.length ? live.map(function(p){ return runCardHtml(p[0],p[1]); }).join("")
     : (!wait.length && !fail.length ? '<div class="empty-note">暂无运行中的任务</div>' : "");
-  $("#settledList").innerHTML = SETTLED.length ? SETTLED.map(function(s,i){
+
+  /* 测试分组：活着的 test run + 已结束里 smoke-* 的记录（默认折叠，只给计数） */
+  var setTest = [], setNormal = [];
+  SETTLED.forEach(function(s,i){ (/^smoke[-_]/i.test(String(s[0]||"")) ? setTest : setNormal).push([s,i]); });
+  var testN = testRuns.length + setTest.length;
+  $("#secTest").hidden = !testN;
+  var cnt = $("#testCnt"); if(cnt) cnt.textContent = String(testN);
+  var tog = $("#testTog"); if(tog) tog.setAttribute("aria-expanded", testOpen ? "true" : "false");
+  var tl = $("#testList"); if(tl) tl.hidden = !testOpen;
+  if(tl) tl.innerHTML = testRuns.map(function(p){
+    var r = p[0];
+    return '<div class="test-row" data-run="'+p[1]+'"><span class="dot '+esc(r.agg||r.status||"working")+'"></span>'+
+      '<span class="t">'+esc(r.title||r.id)+'</span><span class="tm">'+esc(r.dur||"")+'</span></div>';
+  }).join("") + setTest.map(function(p){
+    return '<div class="test-row" data-s="'+p[1]+'"><span class="dot done"></span>'+
+      '<span class="t">'+esc(p[0][0])+'</span><span class="tm">'+esc(p[0][1])+'</span></div>';
+  }).join("");
+  each("#testList .test-row",function(el){
+    el.addEventListener("click",function(){
+      if(el.dataset.run != null){ selectRun(+el.dataset.run); return; }
+      var s = SETTLED[+el.dataset.s];
+      for(var i=0;i<RUNS.length;i++) if(RUNS[i].id===s[2]){ selectRun(i); return; }
+      openSettled(s);
+    });
+  });
+  if(tog && !tog.dataset.bound){
+    tog.dataset.bound = "1";
+    tog.addEventListener("click", function(){
+      testOpen = !testOpen;
+      try{ localStorage.setItem("aica-v1-testgroup", testOpen ? "1" : "0"); }catch(e){}
+      renderSidebar();
+    });
+  }
+
+  $("#settledList").innerHTML = setNormal.length ? setNormal.map(function(p){
+    var s = p[0], i = p[1];
     return '<div class="set-row"><button class="set-open" data-s="'+i+'"><span class="t">'+esc(s[0])+'</span><span class="tm">'+esc(s[1])+'</span></button>'+
       '<button class="set-del" data-s="'+i+'" aria-label="删除记录">×</button></div>';
   }).join("") : '<div class="empty-note">暂无记录</div>';
@@ -1603,8 +1677,12 @@ document.addEventListener("keydown",function(e){ if(e.key==="Escape"){ closeShee
 function switchPane(p){
   each(".rp-tab",function(t){ t.classList.toggle("on", t.dataset.p===p); });
   $("#pane-inbox").hidden = p!=="inbox";
+  $("#pane-props").hidden = p!=="props";
   $("#pane-arts").hidden  = p!=="arts";
   $("#pane-subs").hidden  = p!=="subs";
+  if(p==="props") renderProps();
+  if(p==="arts") renderArts();
+  if(p==="subs") renderSubs(subsNd);
 }
 each(".rp-tab",function(t){
   t.addEventListener("click",function(){ switchPane(t.dataset.p); });
@@ -1627,24 +1705,13 @@ function renderSubs(nd){
   var kids = kidsOf(tree, nd);
   var lvl = Math.min(3, (nd?nd.l:1)+1);
   var head = nd ? '<button class="sub-back" id="subBack">‹ '+esc(nd.nm)+' 的下级</button>' : '';
-  $("#subDock").innerHTML = head + (kids.length ? kids.map(function(k,i){
-    return tnodeHtml(k, nd && i===kids.length-1, lvl, kidsOf(tree,k).length>0);
+  $("#subDock").innerHTML = head + (kids.length ? kids.map(function(k){
+    return subRowHtml(k, kidsOf(tree,k).length>0);
   }).join("") : '<div class="empty-note">无下级子代理</div>');
-  each("#subDock .tn-row",function(el){
-    el.addEventListener("click",function(){ var k = findNode(kids, el.parentElement.dataset.nm);
+  each("#subDock .sub-row",function(el){
+    el.addEventListener("click",function(){ var k = findNode(kids, el.dataset.nm);
       if(!k) return;
       if(kidsOf(tree,k).length){ renderSubs(k); }else{ openSheetFor(k); } });
-  });
-  each("#subDock .tn-go",function(el){
-    el.addEventListener("click",function(e){ e.stopPropagation();
-      var k = findNode(kids, el.parentElement.dataset.nm); if(k) openSheetFor(k); });
-  });
-  each("#subDock .tn-x",function(el){
-    el.addEventListener("click",function(e){ e.stopPropagation();
-      var k = findNode(kids, el.parentElement.dataset.nm); if(!k) return;
-      el.disabled = true;
-      nodePost(k,"abort").then(scheduleFetch).catch(function(){ el.disabled = false; });
-    });
   });
   var bk=$("#subBack"); if(bk) bk.addEventListener("click",function(){ renderSubs(parentOf(tree, nd)); });
 }
@@ -1988,6 +2055,7 @@ renderInbox();
 renderRun(true);
 renderArts();
 renderSubs(null);
+renderProps();
 renderDset();
 syncComposer();
 /* 通知权限不在加载时申请：等用户第一次真的派发任务再问（见 composer），
@@ -2173,6 +2241,8 @@ function palActions(){
   });
   acts.push({ label:"信息密度：切换详细 / 紧凑（当前："+(VERB==="compact"?"紧凑":"详细")+"）", sub:"V", go:function(){ var b=$("#vbBtn"); if(b) b.click(); } });
   acts.push({ label:"打开首个待裁决项", sub:"A", go:function(){ if(!focusFirstApproval()) toast("当前没有待裁决项"); } });
+  acts.push({ label:"右栏：提案页签", sub:"R3", go:function(){ switchPane("props"); } });
+  acts.push({ label:"右栏：子代理页签", sub:"R3", go:function(){ switchPane("subs"); renderSubs(subsNd); } });
   acts.push({ label:"派发新任务（聚焦输入框）", sub:"/", go:function(){ var c=$("#cText"); if(c) c.focus(); } });
   acts.push({ label:"健康检查 / 诊断包", sub:"D", go:function(){ openHealth($("#palBtn")); } });
   return acts;
@@ -2253,6 +2323,8 @@ document.addEventListener("keydown", function(e){
   }
   if(e.key === "Escape"){
     if(palOpen){ e.preventDefault(); closePalette(); return; }
+    var pp = $("#prop");
+    if(pp && !pp.hidden){ e.preventDefault(); closeProp(); return; }   /* 关层 ≠ 应用/拒绝 */
     var hp = $("#health");
     if(hp && !hp.hidden){ e.preventDefault(); closeHealth(); return; }
     return;                       /* 其余交给已有的 Esc 处理（关 sheet）——关层 ≠ 批准 */
@@ -2287,7 +2359,144 @@ function bindChrome(){
       else if(e.key === "Enter"){ e.preventDefault(); runPalItem(palItems[palSel]); }
     });
   }
+  bindPropUi();
 }
+/* ================= R3：子代理页签的行（path / 状态点 / 目标 / 耗时） ================= */
+function subRowHtml(k){
+  return '<button class="test-row sub-row" data-nm="'+esc(k.nm)+'">'+
+    '<span class="dot '+esc(k.st)+'"></span>'+
+    '<span class="sub-path">'+esc(k.path)+'</span>'+
+    '<span class="t">'+esc(String(k.d||"").slice(0,40))+'</span>'+
+    '<span class="tm">'+esc(k.el||"")+'</span></button>';
+}
+
+/* ================= R3：提案页签（S28 的 UI 面） ================= */
+var PROPS = [], propArmAt = 0, propCur = null, propConfirmHigh = false;
+function fmtWhen(iso){
+  var t = Date.parse(String(iso||""));
+  if(!t) return "";
+  var d = Math.max(0, Date.now() - t);
+  if(d < 60e3) return "刚刚";
+  if(d < 3600e3) return Math.round(d/60e3)+" 分钟前";
+  if(d < 86400e3) return Math.round(d/3600e3)+" 小时前";
+  return Math.round(d/86400e3)+" 天前";
+}
+/* change.patch 全文 → S18 的 DiffView（复用同一个展开组件，不另造渲染） */
+function patchToDiffView(slug, patch){
+  if(!patch) return null;
+  var lines = String(patch).split("\n");
+  var file = "", add = 0, del = 0, hunks = 0;
+  lines.forEach(function(l){
+    if(/^\+\+\+ /.test(l)){ if(!file) file = l.replace(/^\+\+\+ (b\/)?/, "").trim(); return; }
+    if(/^@@/.test(l)){ hunks += 1; return; }
+    if(/^\+/.test(l)) add += 1;
+    else if(/^-/.test(l)) del += 1;
+  });
+  return { file: file || "patch.diff", add: add, del: del, hunks: hunks,
+           patch: lines.slice(0, 60), total: lines.length, truncated: lines.length > 60 };
+}
+function renderProps(){
+  var dock = $("#propDock"); if(!dock) return;
+  if(!dock.dataset.loaded) dock.innerHTML = '<div class="empty-note">读取提案…</div>';
+  fetch("/api/proposals").then(function(r){ return r.json().then(function(d){ return {ok:r.ok, d:d}; }); }).then(function(x){
+    if(!x.ok){
+      dock.innerHTML = '<div class="empty-note">'+esc(x.d && (x.d.error||x.d.hint) || "提案接口不可用")+'</div>';
+      return;
+    }
+    PROPS = Array.isArray(x.d.proposals) ? x.d.proposals : [];
+    dock.dataset.loaded = "1";
+    var pend = PROPS.filter(function(p){ return p.status === "pending"; }).length;
+    var bdg = $("#rpPropsBdg"); if(bdg){ bdg.textContent = String(pend); bdg.hidden = !pend; }
+    dock.innerHTML = PROPS.length ? PROPS.map(function(p,i){
+      var risk = String(p.risk || "low");
+      return '<button class="prop-item" data-i="'+i+'">'+
+        '<span class="p1"><span class="slug">'+esc(p.slug)+'</span>'+
+        '<span class="risk risk-'+esc(risk)+'">'+esc(risk)+'</span>'+
+        '<span class="st-'+esc(p.status)+'">'+esc(p.status)+'</span></span>'+
+        '<span class="p2"><span>'+esc(fmtWhen(p.created_at))+'</span><span>'+p.files+' 个文件</span>'+
+        (p.verify_cmd ? '<span>'+esc(String(p.verify_cmd).slice(0,28))+'</span>' : '')+'</span></button>';
+    }).join("") : '<div class="empty-note">还没有提案：worker 用 ev_propose 提出改进后会出现在这里。</div>';
+    each("#propDock .prop-item", function(el){
+      el.addEventListener("click", function(){ openPropDetail(PROPS[+el.dataset.i]); });
+    });
+  }).catch(function(e){ dock.innerHTML = '<div class="empty-note">读取失败：'+esc(String(e).slice(0,80))+'</div>'; });
+}
+function openPropDetail(p){
+  if(!p) return;
+  propCur = p; propConfirmHigh = false; propArmAt = Date.now() + 500;   // 500ms 防误触（P10）
+  var el = $("#prop"); if(!el) return;
+  el.hidden = false;
+  $("#propTitle").textContent = p.slug;
+  $("#propMeta").textContent = String(p.risk||"low")+" · "+String(p.status||"")+" · "+(fmtWhen(p.created_at)||"");
+  $("#propBody").innerHTML = '<div class="hint">读取提案内容…</div>';
+  fetch("/api/proposals/"+encodeURIComponent(p.slug)).then(function(r){ return r.json(); }).then(function(d){
+    var q = (d && d.proposal) || {};
+    var md = String(q.proposal||"").split("\n").slice(0, 40).join("\n");
+    var dv = patchToDiffView(q.slug || p.slug, q.patch);
+    var st = String(q.status || p.status || "pending");
+    var acts = st === "pending"
+      ? '<div class="prop-act">'+
+          '<button class="opt solid" id="propApply">应用</button>'+
+          '<input id="propReason" placeholder="拒绝理由（必填）" autocomplete="off">'+
+          '<button class="opt" id="propReject">拒绝</button>'+
+          '<span class="prop-note" id="propNote"></span>'+
+        '</div>'
+      : '<div class="prop-act"><span class="prop-note">这条提案已经是 '+esc(st)+'，不再提供动作（P10：动作由数据决定）</span></div>';
+    $("#propBody").innerHTML =
+      '<div class="prop-sec">动机 / 预期</div><pre class="prop-md">'+esc(md || "（proposal.md 为空）")+'</pre>'+
+      '<div class="prop-sec">补丁</div>'+(dv ? diffsHtml({ id:"prop-"+(q.slug||p.slug), diffs:[dv] }) : '<div class="empty-note">patch.diff 为空</div>')+
+      '<div class="prop-sec">验证命令</div><div class="prop-md" style="font-family:var(--f-mono);">'+esc(q.verify_cmd || "（未配置）")+'</div>'+
+      acts;
+    bindDiffs("#propBody");
+    if(st === "pending") bindPropActions(q);
+  }).catch(function(e){
+    $("#propBody").innerHTML = '<div class="hint">读取失败：'+esc(String(e).slice(0,100))+'</div>';
+  });
+}
+function bindPropActions(q){
+  var apply = $("#propApply"), rej = $("#propReject"), reason = $("#propReason"), note = $("#propNote");
+  if(apply) apply.addEventListener("click", function(){
+    if(Date.now() < propArmAt){ note.textContent = "刚打开，先看一眼（500ms 内不执行）"; return; }
+    if(String(q.risk) === "high" && !propConfirmHigh){
+      propConfirmHigh = true;
+      apply.textContent = "确认应用（high 风险）";
+      note.textContent = "高风险：再点一次才应用";
+      return;
+    }
+    sendPropAction("apply", { force: String(q.risk) === "high" });
+  });
+  if(rej) rej.addEventListener("click", function(){
+    if(Date.now() < propArmAt){ note.textContent = "刚打开，先看一眼（500ms 内不执行）"; return; }
+    var r = String(reason && reason.value || "").trim();
+    if(!r){ note.textContent = "拒绝必须填理由"; if(reason) reason.focus(); return; }
+    sendPropAction("reject", { reason: r });
+  });
+}
+function sendPropAction(act, body){
+  if(!propCur) return;
+  var slug = propCur.slug, note = $("#propNote");
+  if(note) note.textContent = "提交中…";
+  fetch("/api/proposals/"+encodeURIComponent(slug)+"/"+act,
+        { method:"POST", headers:{ "content-type":"application/json" }, body: JSON.stringify(body||{}) })
+    .then(function(r){ return r.json().then(function(d){ return { ok:r.ok, d:d }; }); })
+    .then(function(x){
+      if(!x.ok){ if(note) note.textContent = "失败："+(x.d && (x.d.error||x.d.message) || "unknown"); return; }
+      if(note) note.textContent = act === "apply" ? "已应用" : "已拒绝";
+      renderProps();
+      setTimeout(closeProp, 650);
+    })
+    .catch(function(e){ if(note) note.textContent = "失败："+String(e).slice(0,80); });
+}
+function closeProp(){
+  var el = $("#prop"); if(!el || el.hidden) return;
+  el.hidden = true; propCur = null; propConfirmHigh = false;
+  try{ var t = document.querySelector('.rp-tab[data-p="props"]'); if(t) t.focus(); }catch(e){}
+}
+function bindPropUi(){
+  var c = $("#propClose"); if(c) c.addEventListener("click", closeProp);
+  var ov = $("#prop"); if(ov) ov.addEventListener("click", function(e){ if(e.target === this) closeProp(); });
+}
+
 if(document.readyState === "loading") document.addEventListener("DOMContentLoaded", bindChrome);
 else bindChrome();
 
@@ -2311,6 +2520,16 @@ else bindChrome();
       <button class="opt solid" id="hpClose">关闭</button>
     </header>
     <div class="hp-body" id="hpBody"></div>
+  </div>
+</div>
+
+<!-- ================= R3：提案详情（S28 UI 面） ================= -->
+<div class="ov" id="prop" hidden>
+  <div class="hp" role="dialog" aria-modal="true" aria-label="提案详情">
+    <header><b id="propTitle">提案</b><span class="hp-time" id="propMeta"></span>
+      <button class="opt" id="propClose">关闭</button>
+    </header>
+    <div class="hp-body" id="propBody"></div>
   </div>
 </div>
 

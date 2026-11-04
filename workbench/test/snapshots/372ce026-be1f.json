@@ -2,6 +2,7 @@
  "runs": [
   {
    "id": "372ce026-be1f",
+   "kind": null,
    "title": "smoke-tools",
    "status": "done",
    "agg": "done",

@@ -2,6 +2,7 @@
  "runs": [
   {
    "id": "wb-fixture-demo1",
+   "kind": "meta.test",
    "title": "workbench 冒烟夹具",
    "status": "failed",
    "agg": "failed",
