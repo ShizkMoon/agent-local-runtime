@@ -29,8 +29,8 @@
      "ref": null,
      "out": [
       "total 40",
-      "drwxr-xr-x 1 Administrator 197121     0 Nov  4 16:12 .",
-      "drwxr-xr-x 1 Administrator 197121     0 Nov  4 16:12 .."
+      "drwxr-xr-x 1 demo 197121     0 Nov  4 16:12 .",
+      "drwxr-xr-x 1 demo 197121     0 Nov  4 16:12 .."
      ]
     },
     {
@@ -45,7 +45,7 @@
      "out": [
       "exit=0",
       "total 66",
-      "drwxr-xr-x 1 Administrator 197121     0 Nov  4 16:12 ."
+      "drwxr-xr-x 1 demo 197121     0 Nov  4 16:12 ."
      ]
     },
     {
@@ -99,7 +99,7 @@
    "arts": [
     {
      "fn": "ls_root.txt",
-     "sz": "765 B"
+     "sz": "657 B"
     }
    ]
   }

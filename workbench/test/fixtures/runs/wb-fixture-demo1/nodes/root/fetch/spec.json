@@ -6,7 +6,7 @@
   "goal": "读取 runtime 源文件并整理接口清单",
   "inputs": [
     {
-      "ref": "C:/Repos/agent-local-runtime/src/envelope.ts",
+      "ref": "C:/work/agent-local-runtime/src/envelope.ts",
       "trust": "system"
     }
   ],
