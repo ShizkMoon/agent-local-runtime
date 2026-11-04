@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url";
 import { execFile, execFileSync, spawn, type ChildProcess } from "node:child_process";
 // S16：视图投影住在 view.ts（纯函数，runsDir 由参数传入）；本文件只做 HTTP 胶水
 import { buildView, okId, badSeg, readJson, safeJoinIn, nodePaths, nodeStatus, evHint, runPulse, viewCacheStats, clearViewCache, approvalState, proposalDetail, mergeProposal } from "./view.ts";
+import { arEnv, spawnDaemon } from "./spawn.ts";
 // S19：审批决策闭集由 gate.ts 持有（唯一真相），桥只做校验与落盘
 import { GATE_DECISIONS } from "../aica-pi/extensions/gate.ts";
 // S21：事件增量读与 fork 复用 runs.ts 的唯一实现（seq 语义只在一处定义）
@@ -166,8 +167,6 @@ function apiView(res: any): void {
 let daemonProc: ChildProcess | null = null;
 let daemonCache = { at: 0, running: false };
 
-function arEnv(): NodeJS.ProcessEnv { return { ...process.env, AICA_STATE: STATE }; }
-
 /** 本 STATE 的常驻 daemon 是否在跑：以 daemon 自己写的 STATE/daemon.pid 心跳为准
     （进程名匹配会把别的 AICA_STATE 的 daemon 误认成本地的） */
 function daemonRunning(): boolean {
@@ -190,9 +189,7 @@ function ensureDaemon(): boolean {
   try {
     mkdirSync(STATE, { recursive: true });
     const logFd = openSync(join(STATE, "daemon.log"), "a");
-    daemonProc = spawn(process.execPath, [AR_CLI, "daemon"], {
-      detached: true, stdio: ["ignore", logFd, logFd], windowsHide: true, env: arEnv(),
-    });
+    daemonProc = spawnDaemon(spawn, { execPath: process.execPath, cli: AR_CLI, logFd, env: arEnv(STATE) });
     daemonProc.unref();
     daemonProc.on("exit", () => { daemonProc = null; });
     daemonCache = { at: Date.now(), running: true };
@@ -208,7 +205,7 @@ function apiDeleteRun(res: any, rootId: string): void {
     if (existsSync(join(dir, "nodes", ...p.split("/"), "worker.json"))) {
       try {
         execFileSync(process.execPath, [AR_CLI, "abort", "--run", rootId, "--node", p],
-          { env: arEnv(), timeout: 20_000, windowsHide: true });
+          { env: arEnv(STATE), timeout: 20_000, windowsHide: true });
       } catch { /* 尽力 abort，删除照常 */ }
     }
   }
@@ -417,7 +414,7 @@ function apiTask(req: any, res: any): void {
       ...(task.accept ? { accept: task.accept } : {}), ev_id: `wb-${Date.now().toString(36)}`,
     });
     const child = execFile(process.execPath, [AR_CLI, "dispatch"],
-      { env: arEnv(), timeout: 20_000, windowsHide: true, maxBuffer: 1024 * 1024 },
+      { env: arEnv(STATE), timeout: 20_000, windowsHide: true, maxBuffer: 1024 * 1024 },
       (e, stdout, stderr) => {
         if (e) return err(res, 500, `ar dispatch: ${String(stderr || e.message || e).slice(0, 400)}`);
         let env1: any;
@@ -452,11 +449,11 @@ function apiReply(req: any, res: any, rootId: string, path: string): void {
         const cur = readJson<any>(rj);
         if (cur?.status === "done") return err(res, 409, "node already done（已完成没必要打断，直接 fork 重跑）");
         execFile(process.execPath, [AR_CLI, "reply", "--run", rootId, "--node", path, "--text", text.trim()],
-          { env: arEnv(), timeout: 10_000, windowsHide: true, maxBuffer: 512 * 1024 },
+          { env: arEnv(STATE), timeout: 10_000, windowsHide: true, maxBuffer: 512 * 1024 },
           (e, _o, stderr) => {
             if (e) return err(res, 500, `ar reply: ${String(stderr || e).slice(0, 200)}`);
             execFile(process.execPath, [AR_CLI, "abort", "--run", rootId, "--node", path],
-              { env: arEnv(), timeout: 20_000, windowsHide: true, maxBuffer: 512 * 1024 },
+              { env: arEnv(STATE), timeout: 20_000, windowsHide: true, maxBuffer: 512 * 1024 },
               (e2, _o2, s2) => {
                 if (e2) return err(res, 500, `ar abort: ${String(s2 || e2).slice(0, 200)}`);
                 // 归档名用 result.resolved.json：pendingNodes 见它就把这次拉起算 resumed（带上 [恢复] 行）
@@ -474,7 +471,7 @@ function apiReply(req: any, res: any, rootId: string, path: string): void {
         JSON.stringify({ ts: new Date().toISOString(), text }) + "\n", "utf8");
       // 首选 ar reply（注入 spec.reply，worker 上下文可见）；失败回退写 reply.txt 文件标记
       execFile(process.execPath, [AR_CLI, "reply", "--run", rootId, "--node", path, "--text", text.trim()],
-        { env: arEnv(), timeout: 10_000, windowsHide: true, maxBuffer: 512 * 1024 },
+        { env: arEnv(STATE), timeout: 10_000, windowsHide: true, maxBuffer: 512 * 1024 },
         (e, _stdout, stderr) => {
           if (e) {
             try { mark(); return json(res, 200, { ok: true, mode: "file", warn: String(stderr || e).slice(0, 300) }); }
@@ -617,7 +614,7 @@ function apiAbort(res: any, rootId: string, path: string): void {
   const dir = safeJoin(rootId, "nodes", ...path.split("/"));
   if (!dir || !existsSync(dir)) return err(res, 404, "node not found");
   execFile(process.execPath, [AR_CLI, "abort", "--run", rootId, "--node", path],
-    { env: arEnv(), timeout: 20_000, windowsHide: true, maxBuffer: 512 * 1024 },
+    { env: arEnv(STATE), timeout: 20_000, windowsHide: true, maxBuffer: 512 * 1024 },
     (e, stdout, stderr) => {
       if (e) return err(res, 500, `ar abort: ${String(stderr || e.message || e).slice(0, 300)}`);
       let env1: any = null;
@@ -761,6 +758,7 @@ const server = createServer((req, res) => {
 });
 
 server.listen(PORT, HOST, () => console.log(`[workbench] http://${HOST}:${PORT}  runs=${RUNS}`));
+
 
 
 

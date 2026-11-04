@@ -16,8 +16,9 @@ export interface SpecInput {
 
 /** @file 引用的基准目录候选：repo(env) → runs 祖先里的仓库根 → 节点目录（见 daemon.atRefBases） */
 
-/** R3：profile 闭集（入口校验 + 运行期兜底共用；orchestrator/advisor 是 S11 遗留角色槽，不在入口闭集里） */
-export const PROFILES = ["worker", "plan", "reviewer"] as const;
+/** R3：profile 闭集（入口校验 + 运行期兜底共用）。plan=只读规划档；worker/reviewer/orchestrator/advisor 是既有角色槽
+ *  （reviewer 仍走 REVIEWER_PI_TOOLS；orchestrator/advisor/worker 走 worker 工具面） */
+export const PROFILES = ["worker", "plan", "reviewer", "orchestrator", "advisor"] as const;
 export type Profile = (typeof PROFILES)[number];
 export function isProfile(x: unknown): x is Profile {
   return typeof x === "string" && (PROFILES as readonly string[]).includes(x);

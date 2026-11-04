@@ -121,6 +121,15 @@ test("profile 闭集：入口拒非法值（BAD_INPUT + 非 0 退出），daemon
   assert.equal(good.status, 0, String(good.stdout) + String(good.stderr));
   assert.equal(R.readSpec(okRun.rootId, "root")?.profile, "plan");
 
+  // 既有角色槽不能被闭集打断：orchestrator 入口通过，工具面仍是 worker（含 bash/write）
+  const orch = R.createRun({ subject: "profile orchestrator" });
+  const og = spawnSync(process.execPath, [cli, "node-create", "--run", orch.rootId, "--path", "root", "--goal", "g", "--profile", "orchestrator"], { encoding: "utf8", env });
+  assert.equal(og.status, 0, String(og.stdout) + String(og.stderr));
+  const orchSpec = R.readSpec(orch.rootId, "root")!;
+  assert.equal(orchSpec.profile, "orchestrator");
+  assert.ok(D.toolAllowlist(orchSpec).includes("bash"), "orchestrator 工具面 = worker（含 bash）");
+  assert.ok(D.toolAllowlist(orchSpec).includes("write"), "orchestrator 工具面 = worker（含 write）");
+
   // 运行期兜底：历史 spec 里的非法 profile → 按 worker 跑 + input 警告
   const legacy = R.createRun({ subject: "legacy profile" });
   R.writeSpec(legacy.rootId, "root", spec({ profile: "plna" }));
