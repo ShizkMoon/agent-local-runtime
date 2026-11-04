@@ -180,6 +180,7 @@ button:focus:not(:focus-visible){outline:none}
 .pill i{width:6px;height:6px;border-radius:50%;background:var(--t3);flex:none}
 .pill.working i{background:var(--brand);animation:breath 1.9s var(--e) infinite}
 .pill.input i{background:var(--brand)}   /* 等你回复 = 静止 clay */
+.pill.failed{color:var(--fig)} .pill.failed i{background:var(--fig)}
 @keyframes breath{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.5;transform:scale(.72)}}
 .dur{margin-left:auto;font-family:var(--f-mono);font-size:12px;color:var(--t3);font-variant-numeric:tabular-nums;flex:none}
 
@@ -645,6 +646,7 @@ function pillOf(st){
   if(st==="working") return '<span class="pill working"><i></i>进行中</span>';
   if(st==="input")   return '<span class="pill input"><i></i>等你回复</span>';
   if(st==="done")    return '<span class="pill"><i></i>已完成</span>';
+  if(st==="failed")  return '<span class="pill failed"><i></i>失败</span>';
   return '<span class="pill"><i></i>空闲</span>';
 }
 function renderSidebar(){

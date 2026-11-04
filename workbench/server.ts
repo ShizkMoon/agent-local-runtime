@@ -268,7 +268,8 @@ function apiView(res: any): void {
       settled.push([meta?.subject ?? rootId, hhmm(ended ?? meta?.created_at ?? new Date().toISOString()), rootId]);
       continue;
     }
-    const status = waiting.length ? "input" : "working";  // failed 也算 working（简单聚合）
+    // 聚合：有等待→input；有失败→failed；否则 working（挂在进行中的 run 才有活着的节点）
+    const status = waiting.length ? "input" : nodes.some(n => n.r?.status === "failed") ? "failed" : "working";
     const rootNode = nodes.find(n => n.path === "root") ?? nodes[0];
     // chips：根 spec.accept → [状态,条文]。简化判定：spec.accept_idx===i 的节点 result 存在即 verified、failed 即 failed、无则 pending
     const chips = (rootNode?.spec?.accept ?? []).map((a: string, i: number) => {
@@ -374,10 +375,18 @@ function apiTask(req: any, res: any): void {
     try { task = JSON.parse(body || "{}"); } catch (e) { return err(res, 400, String(e)); }
     const goal = String(task?.goal ?? "").trim();
     if (!goal) return err(res, 400, "goal required");
+    // 权限档位 → 工具面（别透传中文字符串：spec.tools 是数组，字符串会被 spread 成字符）
+    const TOOL_SETS: Record<string, string[] | undefined> = {
+      "标准": undefined,                                                            // 走 daemon 默认执行面
+      "受限": ["read", "ls", "find", "grep"],                                       // 只读
+      "开放": ["read", "write", "edit", "bash", "powershell", "ls", "find", "grep",
+             "agent-desktop", "ego-browser", "kn_recall", "ar_read", "ar_dispatch"],
+    };
+    const tools = TOOL_SETS[String(task.tools ?? "标准")];
     const payload = JSON.stringify({
       subject: goal, to: task.to ?? "agent:local", kind: task.kind ?? "task",
       agent: task.agent ?? "pi", ...(task.profile ? { profile: task.profile } : {}),
-      ...(task.model ? { model: task.model } : {}), ...(task.tools ? { tools: task.tools } : {}),
+      ...(task.model ? { model: task.model } : {}), ...(tools ? { tools } : {}),
       ...(task.accept ? { accept: task.accept } : {}), ev_id: `wb-${Date.now().toString(36)}`,
     });
     const child = execFile(process.execPath, [AR_CLI, "dispatch"],
