@@ -15,7 +15,7 @@
 //      落盘前备份被改文件、失败即按字节回滚（sha256 断言）。
 //   4) 同一 slug 7 天内 apply > 3 次 → stale，防"改不好就一直试"。
 import {
-  existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, lstatSync, realpathSync,
+  existsSync, readFileSync, writeFileSync, appendFileSync, mkdirSync, readdirSync, statSync, lstatSync, realpathSync,
   rmSync, cpSync, renameSync, unlinkSync,
 } from "node:fs";
 import { join, resolve, dirname, relative, isAbsolute } from "node:path";
@@ -23,6 +23,7 @@ import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { STATE, RUNS_DIR, appendEvent, nodeDir } from "./runs.ts";
+import { readSettings } from "./settings.ts";
 
 // ---------- 常量与路径 ----------
 
@@ -460,6 +461,8 @@ export interface ApplyResult {
   slug: string;
   risk?: RiskLevel;
   forced?: boolean;
+  /** R4：低风险自动应用（settings.auto_apply_low）时为 true */
+  auto?: boolean;
   files?: { path: string; action: string; sha256: string | null }[];
   verify?: { cmd: string; exit: number | null; ms: number; tail: string };
   tail?: string;
@@ -573,6 +576,8 @@ export function applyProposal(slug: string, opts: { force?: boolean; now?: numbe
   if (cls.risk === "high" && !opts.force) {
     return { ok: false, code: "NEEDS_FORCE", slug, risk: cls.risk, message: `高风险提案（${cls.files.map((x) => x.path).join(", ")}）需要 --force 二次确认` };
   }
+  // R4：低风险 + settings.auto_apply_low 开 + 未显式 force → 自动应用（high 永不自动）
+  const autoApply = cls.risk === "low" && !opts.force && readSettings().auto_apply_low;
   const repo = repoRoot();
   const tmp = join(tmpRoot(), `apply-${slug}-${Date.now().toString(36)}`);
   try {
@@ -592,11 +597,12 @@ export function applyProposal(slug: string, opts: { force?: boolean; now?: numbe
     if (!committed.ok) return { ok: false, code: "COMMIT_FAILED", slug, risk: cls.risk, rolled_back: true, message: committed.error };
     const at = new Date().toISOString();
     const applied = {
-      at, risk: cls.risk, forced: !!opts.force, verify: { cmd: rec.verify.cmd, exit: verify.exit, ms: verify.ms, tail: verify.tail },
+      at, risk: cls.risk, forced: !!opts.force, auto: autoApply,
+      verify: { cmd: rec.verify.cmd, exit: verify.exit, ms: verify.ms, tail: verify.tail },
       files: committed.files,
     };
     const hist = applyHistory(rec.dir);
-    writeJson(join(rec.dir, "applied.json"), { slug, updated: at, history: [...hist.history, applied].slice(-20) });
+    writeJson(join(rec.dir, "applied.json"), { slug, updated: at, auto: autoApply, history: [...hist.history, applied].slice(-20) });
     // §9.5：应用成功的提案给来源节点写一条 learn 事件（下一轮 learned.md 注入时可见）
     const src = rec.meta.source;
     if (src?.root_id && src.path) {
@@ -604,7 +610,18 @@ export function applyProposal(slug: string, opts: { force?: boolean; now?: numbe
         appendEvent(src.root_id, src.path, { kind: "learn", data: { proposal: slug, risk: cls.risk, files: committed.files.map((f) => f.path), verify: { exit: verify.exit } } });
       } catch { /* 来源节点已归档也不影响应用结果 */ }
     }
-    return { ok: true, slug, risk: cls.risk, forced: !!opts.force, applied_at: at, files: committed.files,
+    // R4：自动应用的审计（index.jsonl 恒写；有来源节点再补一条节点事件）
+    if (autoApply) {
+      const audit = { slug, risk: cls.risk, auto: true, files: committed.files.map((f) => f.path), verify: { exit: verify.exit } };
+      try {
+        mkdirSync(RUNS_DIR, { recursive: true });
+        appendFileSync(join(RUNS_DIR, "index.jsonl"), JSON.stringify({ ts: at, event: "auto_applied", ...audit }) + "\n", "utf8");
+      } catch { /* 审计写不进不阻断应用 */ }
+      if (src?.root_id && src.path) {
+        try { appendEvent(src.root_id, src.path, { kind: "auto_applied", data: audit }); } catch { /* 同上 */ }
+      }
+    }
+    return { ok: true, slug, risk: cls.risk, forced: !!opts.force, auto: autoApply, applied_at: at, files: committed.files,
       verify: { cmd: rec.verify.cmd, exit: verify.exit, ms: verify.ms, tail: verify.tail } };
   } catch (e) {
     return { ok: false, code: "APPLY_ERROR", slug, message: String((e as Error)?.message ?? e) };

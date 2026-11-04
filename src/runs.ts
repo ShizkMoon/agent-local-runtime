@@ -2,7 +2,7 @@
 import { mkdirSync, writeFileSync, readFileSync, existsSync, readdirSync, appendFileSync, renameSync, unlinkSync, statSync, cpSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { join, resolve } from "node:path";
-import type { SpecEnvelope, ResultEnvelope, EventRecord } from "./envelope.ts";
+import type { SpecEnvelope, ResultEnvelope, EventRecord, NodeStatus } from "./envelope.ts";
 import { nodeId, stableId } from "./envelope.ts";
 
 // 空串按未设置处理：daemon 若把 AICA_STATE="" 传给 worker，STATE="" 会让 RUNS_DIR 变成相对路径
@@ -87,14 +87,67 @@ export function writeResult(rootId: string, path: string, result: Omit<ResultEnv
   return full;
 }
 
-/** 补丁式改 result（writeResult 幂等先写者胜；daemon spent 回填等收尾场景走这里），无 result 返回 null */
+/** 补丁式改 result（writeResult 幂等先写者胜；daemon spent 回填等收尾场景走这里），无 result 返回 null。
+ *  G-2：带 status 的补丁走状态机（非法迁移 → state_reject 事件 + 保留旧状态）。 */
 export function patchResult(rootId: string, path: string, patch: Partial<ResultEnvelope>): ResultEnvelope | null {
   const file = join(nodeDir(rootId, path), "result.json");
   const cur = readJson<ResultEnvelope>(file);
   if (!cur) return null;
+  if (patch.status && patch.status !== cur.status) {
+    return transitResult(rootId, path, patch as Partial<ResultEnvelope> & { status: NodeStatus }, { source: "patchResult" }).result;
+  }
   const next: ResultEnvelope = { ...cur, ...patch, id: cur.id, type: "result" };
   writeJson(file, next);
   return next;
+}
+
+// ---- G-2：result 状态机（闭集迁移） ----
+/** running = 还没有 result（worker 在跑）；waiting/done/failed 是落盘状态；done|failed 为终止态 */
+export const STATUS_TRANSITIONS: Record<string, readonly string[]> = {
+  running: ["waiting", "done", "failed"],
+  waiting: ["running", "done", "failed"],
+  done: [],
+  failed: [],
+};
+
+/** from=null 表示还没有 result（= running）。历史视图态（me/blocked/split/spec）只允许收口到 waiting/done/failed */
+export function canTransit(from: string | null | undefined, to: string): boolean {
+  if (!from) return true;
+  if (from === to) return true;
+  const allowed = STATUS_TRANSITIONS[from];
+  if (!allowed) return to === "waiting" || to === "done" || to === "failed";
+  return allowed.includes(to);
+}
+
+export interface TransitOutcome {
+  ok: boolean;
+  code?: "ILLEGAL_TRANSITION";
+  from: string;
+  to: string;
+  result: ResultEnvelope | null;
+}
+
+/** 状态落盘的唯一入口：所有带 status 的写入都应走它（CLI done/fail/gate/wait、daemon resolveWaiting、patchResult）。
+ *  非法迁移：写 state_reject 事件（from/to/来源）、保留旧状态、返回 ILLEGAL_TRANSITION。 */
+export function transitResult(
+  rootId: string,
+  path: string,
+  patch: Partial<ResultEnvelope> & { status: NodeStatus },
+  opts: { source?: string } = {},
+): TransitOutcome {
+  const cur = readResult(rootId, path);
+  const from = cur?.status ?? "running";
+  if (!canTransit(from, patch.status)) {
+    appendEvent(rootId, path, { kind: "state_reject", data: { from, to: patch.status, source: opts.source ?? "unknown" } });
+    return { ok: false, code: "ILLEGAL_TRANSITION", from, to: patch.status, result: cur };
+  }
+  if (!cur) {
+    const written = writeResult(rootId, path, patch);
+    return { ok: true, from, to: patch.status, result: written };
+  }
+  const next: ResultEnvelope = { ...cur, ...patch, id: cur.id, type: "result" };
+  writeJson(join(nodeDir(rootId, path), "result.json"), next);
+  return { ok: true, from, to: patch.status, result: next };
 }
 
 export function appendEvent(rootId: string, path: string, rec: Omit<EventRecord, "ts">): void {
@@ -376,9 +429,17 @@ export function abortWorker(rootId: string, path: string, summary = "aborted by 
   return { pid: w?.pid ?? null, killed };
 }
 
-/** resume：waiting 的 result.json 归档为 result.resolved.json → 节点回到 pending（reply 时隐式触发） */
+/** resume：waiting 的 result.json 归档为 result.resolved.json → 节点回到 running（reply 时隐式触发）。
+ *  G-2：只有 waiting 能 resume；done/failed 终止态 → 写 state_reject，返回 false。 */
 export function resolveWaiting(rootId: string, path: string): boolean {
-  if (readResult(rootId, path)?.status !== "waiting") return false;
+  const cur = readResult(rootId, path);
+  if (!cur) return false;
+  if (cur.status !== "waiting") {
+    if (!canTransit(cur.status, "running")) {
+      appendEvent(rootId, path, { kind: "state_reject", data: { from: cur.status, to: "running", source: "resolveWaiting" } });
+    }
+    return false;
+  }
   try {
     renameSync(join(nodeDir(rootId, path), "result.json"), join(nodeDir(rootId, path), "result.resolved.json"));
     return true;

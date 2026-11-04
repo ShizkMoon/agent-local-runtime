@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // ar CLI：无状态命令面。evd/受限入口/人工共用，统一 JSON envelope 输出
-import { createRun, writeSpec, readSpec, writeResult, checkRun, appendEvent, appendCmdOnce, readEventsSince, writeGate, abortWorker, forkNode, queueReply, RUNS_DIR, runsDir } from "./runs.ts";
+import { createRun, writeSpec, readSpec, transitResult, checkRun, appendEvent, appendCmdOnce, readEventsSince, writeGate, abortWorker, forkNode, queueReply, RUNS_DIR, runsDir } from "./runs.ts";
 import { daemonLoop } from "./daemon.ts";
 import { listProposals, showProposal, applyProposal, rejectProposal, createProposal, ProposalError } from "./proposals.ts";
 import type { SpecEnvelope, NodeStatus } from "./envelope.ts";
@@ -152,8 +152,16 @@ async function main(): Promise<void> {
       if (!rootId) return usage(cmd, "缺 --run", "ar reply --run <root> [--node root] --text <文本> [--mode queue|interrupt]");
       const path = arg("--node") ?? "root";
       const text = arg("--text") ?? (await readStdin()).trim();
+      // R4 A6：steer（真插话）需要 pi RPC，当前版本明确不支持——不假装成功
+      const modeArg = arg("--mode");
+      if (modeArg === "steer") {
+        return out(false, cmd, { node: `node:${rootId}/${path}` }, {
+          code: "UNSUPPORTED",
+          message: "真插话需要 pi RPC，当前版本用 interrupt（打断重拉）或 queue（下一轮生效）",
+        });
+      }
       // S22：running 节点只排队（本轮结束后送达）；waiting/done 照旧；interrupt = 打断并重拉（显式人操作）
-      const mode = arg("--mode") === "interrupt" ? "interrupt" : "queue";
+      const mode = modeArg === "interrupt" ? "interrupt" : "queue";
       let r: ReturnType<typeof queueReply>;
       try { r = queueReply(rootId, path, text, mode); }
       catch (e) { return out(false, cmd, undefined, { code: "NO_NODE", path, message: String((e as Error).message) }); }
@@ -169,10 +177,12 @@ async function main(): Promise<void> {
       const question = arg("--question") ?? (await readStdin()).trim();
       if (!question) return usage(cmd, "缺 --question", "ar gate --run <root> --question <文本> [--opts 同意;拒绝]");
       const opts = arg("--opts")?.split(";").filter(Boolean);
+      // G-2：先判迁移再落 gate，避免在终止态节点上留下孤儿 gate.json
+      const tr = transitResult(rootId, path, { status: "waiting", summary: question }, { source: `ar ${cmd}` });
+      if (!tr.ok) return out(false, cmd, { from: tr.from, to: tr.to }, { code: "ILLEGAL_TRANSITION", from: tr.from, to: tr.to, message: `${tr.from} → waiting 非法（${tr.from} 为终止态）；旧状态保留` });
       writeGate(rootId, path, { question, ...(opts?.length ? { opts } : {}) });
-      const r = writeResult(rootId, path, { status: "waiting", summary: question });
       appendCmdOnce(rootId, path, "gate", { question, opts: opts ?? [] });
-      return out(true, cmd, r);
+      return out(true, cmd, tr.result);
     }
     case "done":
     case "fail": {
@@ -184,13 +194,20 @@ async function main(): Promise<void> {
       // S6：worker 自报累计 token；缺省由 daemon 在 worker 退出时按 usage.json 兜底
       const st = Number(arg("--spent-tokens"));
       const summary = arg("--summary") ?? process.argv[3] ?? "";
-      const r = writeResult(rootId, path, {
+      // G-2：done/fail 走状态机；终止态不可覆写 → ILLEGAL_TRANSITION，旧状态保留
+      const tr = transitResult(rootId, path, {
         status, summary,
         ...(Number.isFinite(st) && st > 0 ? { spent: { tokens: st } } : {}),
-      });
+      }, { source: `ar ${cmd}` });
+      if (!tr.ok) {
+        return out(false, cmd, { from: tr.from, to: tr.to }, {
+          code: "ILLEGAL_TRANSITION", from: tr.from, to: tr.to,
+          message: `${tr.from} → ${tr.to} 非法（${tr.from} 为终止态）；旧状态保留`,
+        });
+      }
       // S21：同一条 done/fail 重放 → 只留一条 cmd 回执（result 本身早就幂等）
       appendCmdOnce(rootId, path, cmd, { status, summary });
-      return out(true, cmd, r);
+      return out(true, cmd, tr.result);
     }
     case "wait": {
       // Worker 侧调用（ev_wait 工具）：写 waiting result + wait_on + gate.json；
@@ -199,10 +216,11 @@ async function main(): Promise<void> {
       if (!rootId) return usage(cmd, "缺 --run（或 AR_ROOT_ID）", "ar wait --run <root> --on root/a,root/b");
       const path = process.env.AR_NODE_PATH ?? arg("--node") ?? "root";
       const on = (arg("--on") ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+      const tr = transitResult(rootId, path, { status: "waiting", summary: `等待子节点：${on.join(", ") || "(空)"}`, wait_on: on }, { source: `ar ${cmd}` });
+      if (!tr.ok) return out(false, cmd, { from: tr.from, to: tr.to }, { code: "ILLEGAL_TRANSITION", from: tr.from, to: tr.to, message: `${tr.from} → waiting 非法（${tr.from} 为终止态）；旧状态保留` });
       writeGate(rootId, path, { question: "等待子节点", opts: [] });
-      const r = writeResult(rootId, path, { status: "waiting", summary: `等待子节点：${on.join(", ") || "(空)"}`, wait_on: on });
       appendCmdOnce(rootId, path, "wait", { on });
-      return out(true, cmd, r);
+      return out(true, cmd, tr.result);
     }
     case "event": {
       const rootId = process.env.AR_ROOT_ID ?? arg("--run");

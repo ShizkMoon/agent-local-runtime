@@ -8,6 +8,7 @@ import { pendingNodes, appendEvent, readResult, writeResult, patchResult, writeS
 import { tapStdout, readUsage, usageTokens, type UsageLedger, type UsageTurn } from "./transcribe.ts";
 import type { SpecEnvelope } from "./envelope.ts";
 import { isProfile } from "./envelope.ts";
+import { initMcp } from "./mcp.ts";
 
 const POLL_MS = Number(process.env.AR_POLL_MS ?? 2000);
 // S22：并发以 run 为单位（run.json.parallel / spec.budget.parallel，默认 2，见 runs.pendingNodes）。
@@ -21,7 +22,7 @@ const running = new Set<string>();
 
 // 协议工具恒授（不写 result 就回收不了节点）；敏感工具须 spec.tools 显式声明
 // ev_wait/ev_todo 同列：join 收口与清单投影都是节点自控协议，不属于执行能力
-const PROTOCOL_TOOLS = ["ev_done", "ev_fail", "ev_gate", "ev_wait", "ev_todo"];
+const PROTOCOL_TOOLS = ["ev_done", "ev_fail", "ev_gate", "ev_wait", "ev_todo", "mcp_call"];
 const DEFAULT_PI_TOOLS = [
   "read", "write", "edit", "bash", "powershell", "ls", "find", "grep",
   ...PROTOCOL_TOOLS, "kn_recall", "ar_read", "ev_learn",
@@ -551,6 +552,13 @@ export async function daemonLoop(opts: DaemonOptions = {}): Promise<void> {
   syncUserEnv();
   const started = Date.now();
   indexLog({ event: "daemon_start", once: !!opts.once, pid: process.pid });
+  // R4 H2：MCP 网关（fail-closed）——连不上只记事件并跳过该 server，绝不阻塞节点拉起
+  try {
+    const reg = await initMcp();
+    indexLog({ event: "mcp_registry", servers: reg.servers.map((s) => ({ name: s.name, ok: s.ok, tools: s.tools.length })) });
+  } catch (e) {
+    indexLog({ event: "mcp_unavailable", error: String(e).slice(0, 300) });
+  }
   try {
   for (;;) {
     try {

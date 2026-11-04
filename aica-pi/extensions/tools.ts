@@ -10,6 +10,8 @@ import { Type } from "typebox";
 import { resolveBin } from "./paths.ts";
 // S28：提案白名单/落盘与 CLI 共用一份实现（避免工具与 ar propose 两套判定漂移）
 import { createProposal } from "../../src/proposals.ts";
+// R4 H2：MCP 网关（fail-closed）——注册表由 daemon 启动时写，这里只按 spec.tools 白名单转发
+import { mcpRpc, readRegistry, resolveMcpTool } from "../../src/mcp.ts";
 
 const ART = join(process.cwd(), "artifacts");
 const PREVIEW = 2000;
@@ -197,6 +199,44 @@ export default function (pi: any) {
     parameters: Type.Object({}),
     async execute() {
       return ok(ar(["check", "--run", process.env.AR_ROOT_ID!]));
+    },
+  });
+
+  // R4 H2：MCP 调用（fail-closed）。工具 id = mcp_<server>_<tool>，必须先在 spec.tools 里显式声明；
+  // 未声明 → NOT_DECLARED；server 未连通（daemon 启动时 tools/list 失败）→ UNAVAILABLE。绝不默认暴露。
+  pi.registerTool({
+    name: "mcp_call",
+    label: "MCP Call",
+    description: "调用外部 MCP 工具（fail-closed）：tool 形如 mcp_<server>_<tool>，且必须已在 spec.tools 里声明。未声明返回 NOT_DECLARED，服务不可用返回 UNAVAILABLE。",
+    parameters: Type.Object({
+      tool: Type.String({ description: "mcp_<server>_<tool>" }),
+      args: Type.Optional(Type.Any({ description: "传给 MCP 工具的参数对象" })),
+    }),
+    async execute(_id: string, a: any) {
+      const tool = String(a?.tool ?? "");
+      let declared: string[] = [];
+      try {
+        const spec = JSON.parse(readFileSync(join(process.cwd(), "spec.json"), "utf8"));
+        declared = Array.isArray(spec?.tools) ? spec.tools.map(String) : [];
+      } catch { /* 读不到 spec = 没有声明（fail-closed） */ }
+      if (!declared.includes(tool)) {
+        return err(JSON.stringify({ ok: false, code: "NOT_DECLARED", tool, message: `spec.tools 未声明 ${tool}；MCP 工具必须显式声明` }));
+      }
+      const hit = resolveMcpTool(tool);
+      if (!hit) {
+        // 区分"没注册"与"声明了但服务连不上"：后者要让人看见 daemon 记的 mcp_unavailable 原因
+        const rest = tool.startsWith("mcp_") ? tool.slice("mcp_".length) : "";
+        const down = readRegistry().servers.find((s) => rest.startsWith(s.name + "_") && !s.ok);
+        if (down) return err(JSON.stringify({ ok: false, code: "UNAVAILABLE", tool, server: down.name, message: `MCP 服务不可用：${down.error ?? "未知错误"}` }));
+        return err(JSON.stringify({ ok: false, code: "UNAVAILABLE", tool, message: "该 MCP 工具未注册（daemon 启动时未连通或 server 未声明）" }));
+      }
+      try {
+        const r = await mcpRpc(hit.server.url, "tools/call", { name: hit.tool, arguments: a?.args ?? {} });
+        const text = typeof r === "string" ? r : JSON.stringify(r ?? {});
+        return ok(text.length > PREVIEW ? spill(text, "mcp") : text);
+      } catch (e) {
+        return err(JSON.stringify({ ok: false, code: "CALL_FAILED", tool, message: String((e as Error)?.message ?? e).slice(0, 300) }));
+      }
     },
   });
 
