@@ -92,7 +92,10 @@ function tailEvent(file: string): any | null {
 
 function evHint(ev: any): string {
   const d = ev?.data ?? {};
-  const s = d.tool ?? d.text ?? d.cmd ?? d.question ?? d.summary ?? d.args ?? ev?.kind ?? "";
+  if (ev?.kind === "exit") return `Worker 退出（code ${d.code ?? "?"}）${d.error ? " · " + d.error : ""}`;
+  if (ev?.kind === "spawn") return "拉起 worker";
+  if (ev?.kind === "gate") return String(d.question ?? "等你处理").slice(0, 80);
+  const s = d.text ?? d.cmd ?? d.question ?? d.summary ?? d.args ?? d.tool ?? ev?.kind ?? "";
   return String(s).replace(/\s+/g, " ").trim().slice(0, 80);
 }
 

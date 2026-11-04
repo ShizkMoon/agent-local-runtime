@@ -145,7 +145,8 @@ function spawnWorker(rootId: string, path: string, spec: SpecEnvelope, resumed =
     if (!readResult(rootId, path)) {
       writeResult(rootId, path, {
         status: code === 0 ? "done" : "failed",
-        summary: code === 0 ? "Worker 正常退出（未写执行摘要）" : `Worker 退出码 ${code}${err ? `：${String(err)}` : ""}`,
+        summary: code === 0 ? "Worker 正常退出（未写执行摘要）"
+          : `Worker 异常退出（code ${code}）${err ? `：${String(err)}` : ""}——详见节点 events.jsonl`,
       });
     }
   };
