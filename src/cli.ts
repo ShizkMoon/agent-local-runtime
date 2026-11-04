@@ -5,6 +5,7 @@ import { daemonLoop } from "./daemon.ts";
 import { listProposals, showProposal, applyProposal, rejectProposal, createProposal, ProposalError } from "./proposals.ts";
 import type { SpecEnvelope, NodeStatus } from "./envelope.ts";
 import { PROFILES, isProfile } from "./envelope.ts";
+import { listCommands } from "./commands.ts";
 import { readFileSync } from "node:fs";
 
 function out(ok: boolean, command: string, data?: unknown, error?: unknown): void {
@@ -359,12 +360,18 @@ async function main(): Promise<void> {
       });
       return;
     }
+    case "cmd": {
+      const sub = String(process.argv[3] ?? "").toLowerCase();
+      if (sub !== "list") return usage("cmd", `未知子命令：${sub || "(空)"}`, "ar cmd list");
+      const commands = listCommands();
+      return out(true, "cmd:list", { count: commands.length, commands });
+    }
     case "version":
       return out(true, cmd, { version: "0.1.0", runs: RUNS_DIR });
     default:
       return out(false, "help", undefined, {
         code: "USAGE",
-        commands: ["run-create", "dispatch", "node-create", "spawn", "check", "reply", "gate", "done", "fail", "wait", "event", "events", "fork", "abort", "propose", "daemon", "version"],
+        commands: ["run-create", "dispatch", "node-create", "spawn", "check", "reply", "gate", "done", "fail", "wait", "event", "events", "fork", "abort", "propose", "cmd", "daemon", "version"],
       });
   }
 }

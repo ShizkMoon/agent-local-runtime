@@ -2,13 +2,13 @@
 // 会话边界原因：Session 0 服务碰不到桌面，agent-desktop/ego 只能在交互会话工作
 import { spawn, execFileSync } from "node:child_process";
 import { appendFileSync, existsSync, readFileSync, mkdirSync, copyFileSync, writeFileSync, unlinkSync, statSync } from "node:fs";
-import { join, dirname, isAbsolute, resolve } from "node:path";
+import { join, dirname, isAbsolute, resolve, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { pendingNodes, appendEvent, readResult, writeResult, patchResult, writeSpec, writeWorker, clearWorker, abortWorker, nodeDir, RUNS_DIR, STATE, DEFAULT_PARALLEL, writeCheckpoint, readCheckpoint, lastSeq, closeDanglingTools } from "./runs.ts";
 import { tapStdout, readUsage, usageTokens, type UsageLedger, type UsageTurn } from "./transcribe.ts";
 import type { SpecEnvelope } from "./envelope.ts";
 import { isProfile } from "./envelope.ts";
-import { initMcp } from "./mcp.ts";
+import { initMcp, closeAllMcp } from "./mcp.ts";
 
 const POLL_MS = Number(process.env.AR_POLL_MS ?? 2000);
 // S22：并发以 run 为单位（run.json.parallel / spec.budget.parallel，默认 2，见 runs.pendingNodes）。
@@ -28,6 +28,8 @@ const DEFAULT_PI_TOOLS = [
   ...PROTOCOL_TOOLS, "kn_recall", "ar_read", "ev_learn",
   // S22/S28：派子节点与自进化提案属于能力（要过 gate），不是恒授协议
   "spawn", "ev_propose",
+  // R5：多文件 unified diff（gate exec 档；read-before-edit 由工具内部强制）
+  "apply_patch",
 ];
 // S11 reviewer 默认面：只读核证（不写不派；ev_gate 保留提问通道）。用字面量不用 PROTOCOL_TOOLS 展开——ev_wait/ev_todo 不授给 reviewer
 const REVIEWER_PI_TOOLS = ["read", "ls", "find", "grep", "ar_read", "ev_done", "ev_fail", "ev_gate"];
@@ -197,13 +199,71 @@ export function expandAtRefs(
   return { text: ["## 引用文件", ...blocks].join("\n\n"), refs };
 }
 
+// R5：AGENTS.md 项目上下文（≤8KB）——项目根到 cwd 逐级找 AGENTS.md（优先）/CLAUDE.md
+export const AGENTS_MD_CAP = 8 * 1024;
+export interface AgentsMdInfo { files: string[]; bytes: number; text: string }
+
+/** 项目根：AICA_REPO_ROOT 优先；否则从 cwd 向上找 .git/package.json（≤8 级）；都没有 = cwd */
+export function findProjectRoot(cwd: string): string {
+  if (process.env.AICA_REPO_ROOT) return resolve(process.env.AICA_REPO_ROOT);
+  let d = resolve(cwd);
+  for (let i = 0; i < 8; i++) {
+    if (existsSync(join(d, ".git")) || existsSync(join(d, "package.json"))) return d;
+    const parent = dirname(d);
+    if (parent === d) break;
+    d = parent;
+  }
+  return resolve(cwd);
+}
+
+/** 读 AGENTS.md：同一目录 AGENTS.md 优先，没有才回落 CLAUDE.md；总字节 ≤8KB（超了截断并标记） */
+export function collectAgentsMd(cwd: string, root?: string): AgentsMdInfo {
+  const top = root ? resolve(root) : findProjectRoot(cwd);
+  const here = resolve(cwd);
+  const rel = relative(top, here);
+  const dirs: string[] = [];
+  if (rel && !rel.startsWith("..") && !isAbsolute(rel)) {
+    let d = top;
+    dirs.push(d);
+    for (const seg of rel.split(/[\\/]/).filter(Boolean)) { d = join(d, seg); dirs.push(d); }
+  } else {
+    dirs.push(top);
+    if (here !== top) dirs.push(here);
+  }
+  const files: string[] = [];
+  let text = "";
+  for (const dir of dirs) {
+    const hit = ["AGENTS.md", "CLAUDE.md"].map((n) => join(dir, n)).find((f) => existsSync(f));
+    if (!hit) continue;
+    let body = "";
+    try { body = readFileSync(hit, "utf8"); } catch { continue; }
+    const label = (relative(top, hit) || hit).split("\\").join("/");
+    const block = `${text ? "\n\n" : ""}## ${label}\n\n${body.trim()}`;
+    const room = AGENTS_MD_CAP - Buffer.byteLength(text, "utf8");
+    if (room <= 0) break;
+    const b = Buffer.from(block, "utf8");
+    if (b.length > room) {
+      const suffix = "\n…[AGENTS.md 超出 8KB 截断]";
+      const keep = Math.max(0, room - Buffer.byteLength(suffix, "utf8"));
+      text += b.subarray(0, keep).toString("utf8") + suffix;
+      files.push(label);
+      break;
+    }
+    text += block;
+    files.push(label);
+  }
+  return { files, bytes: Buffer.byteLength(text, "utf8"), text };
+}
+
 /** user message = 变量部分（worker.md 规则走 --append-system-prompt 保证前缀稳定可缓存）；resumed = waiting 回复后恢复拉起
- *  R3：baseDir 用于解析 @file（节点目录，= worker cwd）；onAtRef 让调用方记 input 事件（带 base） */
+ *  R3：baseDir 用于解析 @file（节点目录，= worker cwd）；onAtRef 让调用方记 input 事件（带 base）
+ *  R5：onAgentsMd 让调用方记 input{field:"agents_md"} 事件 */
 export function userMessage(
   spec: SpecEnvelope,
   resumed = false,
   baseDir = process.cwd(),
   onAtRef?: (ref: string, info: AtRef) => void,
+  onAgentsMd?: (info: AgentsMdInfo) => void,
 ): string {
   const lines = [spec.goal, "", "## 节点上下文"];
   lines.push(`- node_id: ${spec.id}`);
@@ -216,6 +276,9 @@ export function userMessage(
   // R3 B3：@file 引用（基准 = repo → runs 祖先 → 节点目录；内容照原样注入，worker 当资料不当指令）
   const at = expandAtRefs(spec.goal ?? "", atRefBases(baseDir), onAtRef);
   if (at.text) lines.push("", at.text);
+  // R5：AGENTS.md 项目上下文（项目根 → cwd，≤8KB；找不到就不注入、不写事件）
+  const agents = collectAgentsMd(baseDir);
+  if (agents.text) { lines.push("", agents.text); onAgentsMd?.(agents); }
   // R3 D5：plan 档的产出契约（prompt 里讲方法，这里钉死落盘位置与回传字段）
   if (spec.profile === "plan") {
     lines.push(
@@ -289,6 +352,7 @@ export function launcher(
   resumed = false,
   dir?: string,
   onAtRef?: (ref: string, info: AtRef) => void,
+  onAgentsMd?: (info: AgentsMdInfo) => void,
 ): { file: string; args: string[]; desc: string } {
   const agent = spec.agent ?? "pi";
   switch (agent) {
@@ -312,7 +376,7 @@ export function launcher(
         "-e", join(AICA_PI, "extensions", "gate.ts"),
         // S14 skills 显式挂载：--no-skills 下 --skill <path> 仍会加载（pi cli.md:202）
         ...(spec.skills ?? []).flatMap((s) => ["--skill", join(AICA_PI, "skills", String(s))]),
-        "--", userMessage(spec, resumed, dir ?? process.cwd(), onAtRef),
+        "--", userMessage(spec, resumed, dir ?? process.cwd(), onAtRef, onAgentsMd),
       ];
       return { file: process.execPath, args, desc: `node ${cli} -p ... [${agent}/${profile} ${model}]` };
     }
@@ -458,6 +522,9 @@ function spawnWorker(rootId: string, path: string, spec: SpecEnvelope, resumed =
           ? { ref, base: info.base, bytes: info.bytes, ...(info.truncated ? { truncated: true } : {}) }
           : { ref, skipped: info.denied ?? "@file 缺失", ...(info.base ? { base: info.base } : {}) },
       });
+    }, (info) => {
+      // R5：AGENTS.md 注入了哪几份、多少字节（找不到时这个回调根本不会被调用）
+      appendEvent(rootId, path, { kind: "input", data: { field: "agents_md", files: info.files, bytes: info.bytes } });
     }));
   } catch (e) {
     running.delete(spec.id);
@@ -578,6 +645,7 @@ export async function daemonLoop(opts: DaemonOptions = {}): Promise<void> {
     await new Promise((r) => setTimeout(r, POLL_MS));
   }
   } finally {
+    try { closeAllMcp(); } catch { /* stdio 子进程清理失败不阻塞退出 */ }
     try { unlinkSync(PIDFILE); } catch { /* 无 pidfile 也正常退出 */ }
   }
   indexLog({ event: "daemon_stop", once: !!opts.once });

@@ -3,15 +3,17 @@
 // API 依据 pi-coding-agent@1.5.0：registerTool({name,label,description,parameters(TypeBox),
 //   execute(toolCallId, params, signal, onUpdate, ctx) → {content:[{type:"text",text}], details, terminate?}})
 import { execFileSync } from "node:child_process";
-import { writeFileSync, readFileSync, existsSync, mkdirSync, appendFileSync } from "node:fs";
-import { join } from "node:path";
+import { writeFileSync, readFileSync, existsSync, mkdirSync, appendFileSync, unlinkSync } from "node:fs";
+import { join, dirname, relative, resolve, isAbsolute, sep } from "node:path";
 import { createHash } from "node:crypto";
 import { Type } from "typebox";
 import { resolveBin } from "./paths.ts";
 // S28：提案白名单/落盘与 CLI 共用一份实现（避免工具与 ar propose 两套判定漂移）
 import { createProposal } from "../../src/proposals.ts";
 // R4 H2：MCP 网关（fail-closed）——注册表由 daemon 启动时写，这里只按 spec.tools 白名单转发
-import { mcpRpc, readRegistry, resolveMcpTool } from "../../src/mcp.ts";
+import { callMcp, readRegistry, resolveMcpTool } from "../../src/mcp.ts";
+// R5：apply_patch 的纯内存应用（all-or-nothing）+ read-before-edit
+import { applyPatchInMemory } from "../../src/patch.ts";
 
 const ART = join(process.cwd(), "artifacts");
 const PREVIEW = 2000;
@@ -59,6 +61,44 @@ function spill(content: string, hint: string): string {
   return `ref=artifacts/${name}\n${head}`;
 }
 
+// R5：节点事件直写（与 events.ts 同格式；runs.readEvents 容忍无 seq 的外部追加）
+function emitEvent(kind: string, data: Record<string, unknown>): void {
+  try { appendFileSync(join(process.cwd(), "events.jsonl"), JSON.stringify({ ts: new Date().toISOString(), kind, data }) + "\n", "utf8"); }
+  catch { /* 事件流失败不阻塞 Worker */ }
+}
+
+// R5 read-before-edit：pi 的 read 工具不是我们的，只能订阅它的 tool_execution 事件记账。
+// 账本放 cwd/.aica-read.json（相对路径列表），重拉/续跑后仍然有效。
+const READ_SET_FILE = join(process.cwd(), ".aica-read.json");
+
+function relKey(p: string): string | null {
+  const abs = resolve(process.cwd(), p);
+  const rel = relative(process.cwd(), abs);
+  if (!rel || rel.startsWith("..") || isAbsolute(rel)) return null;   // 逃出 cwd 的 read 不记账
+  return rel.split(sep).join("/");
+}
+
+function loadReads(): Set<string> {
+  try {
+    const j = JSON.parse(readFileSync(READ_SET_FILE, "utf8"));
+    return new Set(Array.isArray(j?.files) ? j.files.map(String) : []);
+  } catch { return new Set(); }
+}
+
+function saveReads(set: Set<string>): void {
+  try { writeFileSync(READ_SET_FILE, JSON.stringify({ files: [...set].sort() }, null, 2) + "\n", "utf8"); }
+  catch { /* 记账失败只影响 read-before-edit 的严格度，不阻塞 */ }
+}
+
+function markRead(p: string): void {
+  const k = relKey(p);
+  if (!k) return;
+  const s = loadReads();
+  if (s.has(k)) return;
+  s.add(k);
+  saveReads(s);
+}
+
 // ---- ev_learn：经验沉淀到 <AICA_STATE>/memory/learned.md（S12，对齐 OMP learned.md 契约） ----
 const LEARN_MAX_ENTRIES = 50;    // 文件 ≤50 条
 const LEARN_ENTRY_CAP = 2000;    // 每条 ≤2000 字
@@ -87,6 +127,69 @@ function learn(state: string, text: string): string {
 }
 
 export default function (pi: any) {
+  // R5 read-before-edit：订阅 pi 的 read 调用记账（start 记 path，end 且非错误才落账）
+  const pendingReads = new Map<string, string>();
+  try {
+    pi.on?.("tool_execution_start", (e: any) => {
+      if (e?.toolName === "read" && typeof e?.args?.path === "string") pendingReads.set(String(e.toolCallId ?? ""), e.args.path);
+    });
+    pi.on?.("tool_execution_end", (e: any) => {
+      if (e?.toolName !== "read") return;
+      const id = String(e.toolCallId ?? "");
+      const p = pendingReads.get(id) ?? (typeof e?.args?.path === "string" ? e.args.path : "");
+      pendingReads.delete(id);
+      if (!e?.isError && p) markRead(p);
+    });
+  } catch { /* 宿主不支持 on 事件：read 记账退化为"只认 apply_patch 自己写过的文件" */ }
+
+  // R5：apply_patch —— 多文件 unified diff，all-or-nothing + read-before-edit
+  pi.registerTool({
+    name: "apply_patch",
+    label: "Apply Patch",
+    description: "对当前工作目录应用 unified diff（可多文件，all-or-nothing）。改/删已存在文件前必须先 read 过（否则 NEED_READ）；任何 hunk 上下文不匹配整次失败，不写任何文件；成功写 patch + 每文件 file_edit 事件。",
+    parameters: Type.Object({
+      patch: Type.String({ description: "unified diff 文本：--- a/x / +++ b/x / @@ -l,c +l,c @@" }),
+    }),
+    async execute(_id: string, a: any) {
+      const text = String(a?.patch ?? "");
+      const root = process.cwd();
+      const res = applyPatchInMemory(root, text, { readSet: loadReads() });
+      if (!res.ok) {
+        return err(JSON.stringify({
+          ok: false, code: res.code, message: res.message,
+          ...(res.path ? { path: res.path } : {}),
+          ...(res.line ? { line: res.line } : {}),
+          ...(res.needs ? { needs: res.needs } : {}),
+        }));
+      }
+      // 全部成功后才写盘；中途失败按已写文件回滚（all-or-nothing 的兜底）
+      const written: { abs: string; before: string | null }[] = [];
+      try {
+        for (const f of res.files) {
+          const abs = join(root, ...f.path.split("/"));
+          written.push({ abs, before: f.before });
+          if (f.action === "delete") unlinkSync(abs);
+          else { mkdirSync(dirname(abs), { recursive: true }); writeFileSync(abs, f.after ?? "", "utf8"); }
+        }
+      } catch (e) {
+        for (const w of written.reverse()) {
+          try { if (w.before === null) unlinkSync(w.abs); else writeFileSync(w.abs, w.before, "utf8"); }
+          catch { /* 回滚尽力而为 */ }
+        }
+        return err(JSON.stringify({ ok: false, code: "WRITE_FAILED", message: String((e as Error)?.message ?? e).slice(0, 300) }));
+      }
+      const files = res.files.map((f) => ({ path: f.path, add: f.add, del: f.del, action: f.action }));
+      emitEvent("patch", { files, patch: text.slice(0, 20_000) });
+      // 每文件一条 file_edit（view.diffsOf 直接聚合：data.path / add / del / diff）
+      for (const f of res.files) emitEvent("file_edit", { path: f.path, add: f.add, del: f.del, diff: f.diff, action: f.action, tool: "apply_patch" });
+      // 写过的文件视为已读，后续同文件再 patch 不必重新 read
+      const s = loadReads();
+      for (const f of res.files) s.add(f.path);
+      saveReads(s);
+      return ok(`已应用 ${res.files.length} 个文件：\n` + files.map((f) => `- ${f.action} ${f.path} (+${f.add}/-${f.del})`).join("\n"));
+    },
+  });
+
   pi.registerTool({
     name: "ev_done",
     label: "Ev Done",
@@ -231,7 +334,7 @@ export default function (pi: any) {
         return err(JSON.stringify({ ok: false, code: "UNAVAILABLE", tool, message: "该 MCP 工具未注册（daemon 启动时未连通或 server 未声明）" }));
       }
       try {
-        const r = await mcpRpc(hit.server.url, "tools/call", { name: hit.tool, arguments: a?.args ?? {} });
+        const r = await callMcp(hit.server, hit.tool, a?.args ?? {});
         const text = typeof r === "string" ? r : JSON.stringify(r ?? {});
         return ok(text.length > PREVIEW ? spill(text, "mcp") : text);
       } catch (e) {
