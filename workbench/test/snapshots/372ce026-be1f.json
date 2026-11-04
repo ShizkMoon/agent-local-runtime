@@ -4,6 +4,8 @@
    "id": "372ce026-be1f",
    "title": "smoke-tools",
    "status": "done",
+   "agg": "done",
+   "agg_n": 1,
    "dur": "00:05",
    "spent": null,
    "snippet": "Worker 退出（code 0）",
@@ -63,6 +65,28 @@
      "call_id": "call_ad213c4979ae4adda7dda8e8"
     }
    ],
+   "groups": [
+    {
+     "key": "other",
+     "n": 2,
+     "i0": 0,
+     "i1": 1,
+     "err": 0,
+     "ms": 83
+    }
+   ],
+   "stats": {
+    "by": [
+     {
+      "key": "other",
+      "n": 2
+     }
+    ],
+    "n": 2,
+    "ms": 83,
+    "err": 0,
+    "run": 0
+   },
    "turn": {
     "state": "completed",
     "reason": "agent_desktop list-apps 返回 4 个运行中应用（Weixin.exe、WindowsTerminal.exe、ego.exe、msedge.exe），原始输出见 artifacts/ad-fa7cd7db.txt",

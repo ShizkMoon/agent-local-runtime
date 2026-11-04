@@ -64,6 +64,7 @@
   --fig:#b04a6e;    --fig-soft:rgba(176,74,110,.10);
   --ok:#5f7a45;
   --warn:#b07b4f;
+  --warn-soft:rgba(176,123,79,.13);
   --on-brand:#1c1a16;          /* clay 上的字：深墨 */
 
   --hov:rgba(0,0,0,.035);
@@ -92,6 +93,7 @@
   --fig:#c46686;    --fig-soft:rgba(196,102,134,.13);
   --ok:#8fb573;
   --warn:#d4a27f;
+  --warn-soft:rgba(212,162,127,.16);
 
   --hov:rgba(255,255,255,.045);
   --bub:#1e1e1d;
@@ -179,8 +181,10 @@ button:focus:not(:focus-visible){outline:none}
 }
 .pill i{width:6px;height:6px;border-radius:50%;background:var(--t3);flex:none}
 .pill.working i{background:var(--brand);animation:breath 1.9s var(--e) infinite}
-.pill.input i{background:var(--brand)}   /* 等你回复 = 静止 clay */
+.pill.input i{background:var(--brand)}   /* 兼容旧 status="input"（无 agg 时） */
+.pill.blocked{color:var(--warn)} .pill.blocked i{background:var(--warn)}   /* 等你 = 琥珀，球在人这边 */
 .pill.failed{color:var(--fig)} .pill.failed i{background:var(--fig)}
+.run-card .cnt{font-size:12px;color:var(--warn);font-variant-numeric:tabular-nums}
 @keyframes breath{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.5;transform:scale(.72)}}
 .dur{margin-left:auto;font-family:var(--f-mono);font-size:12px;color:var(--t3);font-variant-numeric:tabular-nums;flex:none}
 
@@ -238,15 +242,7 @@ button:focus:not(:focus-visible){outline:none}
 .think .tk{font-family:var(--f-serif);font-style:italic;font-size:13.5px;color:var(--t2)}
 @keyframes tdots{0%,70%,100%{opacity:.3;transform:translateY(0)}30%{opacity:1;transform:translateY(-2.5px)}}
 
-/* 根卡 —— serif 标题 + obj + 验收清单 */
-.root-card{
-  background:var(--s2);border:1px solid var(--ln);
-  border-radius:var(--r-card);padding:16px 18px 8px;
-}
-.root-title{font-family:var(--f-serif);font-size:24px;font-weight:400;color:var(--t1);margin:0 0 6px;letter-spacing:.01em;line-height:1.3}
-.root-obj{font-size:14px;line-height:1.65;color:var(--t2);max-width:62ch}
-
-/* 验收条目 = 派工的点；子代理行挂在各自服务的条目下 */
+/* 验收条目 = 派工的点；子代理行挂在各自服务的条目下（S25：外面套 .aclx 折叠条） */
 .acl-list{margin-top:12px;border-top:1px solid var(--ln)}
 .acl-grp{border-bottom:1px solid var(--ln)}
 .acl-grp:last-child{border-bottom:0}
@@ -573,6 +569,82 @@ button.stp-h:hover{background:var(--hov)}
 /* 卡片刚出现 500ms 内 Enter 不生效（防误批）：opt 用 .arming 提示，不改变布局 */
 .incard.approve.arming .opt{opacity:.55}
 
+/* ============ S25：状态体系与重心（P3/P4/P5/P6/P8/P14/P16/P17） ============
+   四条规矩：
+   1) 一条信息只出现一次：goal 在标题栏与用户气泡各一次，不再进"根卡"；
+   2) 结论在过程之前；过程是"组头统计 + 每条单行"，不是事件流；
+   3) 状态只有一个权威表达：4 视觉态（blocked/working/failed/done），blocked 只来自人在环；
+   4) 等待态一行 shimmer（工具名 + 已用时），诚实截断仍走 .stp-foot。 */
+/* 顶部文字状态（中栏唯一一处；右栏条目各一处） */
+.st-word{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--t3);margin-right:8px}
+.st-word i{width:6px;height:6px;border-radius:50%;background:var(--t3);flex:none}
+.st-word[data-s="blocked"]{color:var(--warn)}
+.st-word[data-s="blocked"] i{background:var(--warn)}
+.st-word[data-s="working"] i{background:var(--brand);animation:breath 1.9s var(--e) infinite}
+.st-word[data-s="failed"]{color:var(--fig)}
+.st-word[data-s="failed"] i{background:var(--fig)}
+/* 信息密度两档（P14）：详细 / 紧凑，只换文字不抢视觉 */
+.vb-btn{height:24px;padding:0 8px;border-radius:var(--r-ctl);font-size:12px;color:var(--t3);
+  transition:background var(--t-ui) var(--e),color var(--t-ui) var(--e);margin-right:2px}
+.vb-btn:hover{background:var(--hov);color:var(--t1)}
+/* 断线态（P16）：贴在标题栏下方、覆盖内容区顶部，不挤压布局。
+   注意：[hidden] 的 UA display:none 会被作者样式的 display:flex 盖掉，必须显式关掉。 */
+#center{position:relative}
+.netbar{position:absolute;left:0;right:0;top:48px;z-index:18;display:flex;align-items:center;gap:10px;
+  padding:6px 16px;border-bottom:1px solid var(--ln);
+  background:linear-gradient(var(--warn-soft),var(--warn-soft)),var(--s1);   /* 不透明：底下内容不许透出来 */
+  font-size:12.5px;color:var(--t2)}
+.netbar[hidden],.st-word[hidden],.aclx-b[hidden],.tlx-b[hidden]{display:none}
+.netbar .nb-a{margin-left:auto;height:22px;padding:0 8px;border:1px solid var(--ln-hi);border-radius:var(--r-ctl);
+  font-size:12px;color:var(--t2);background:transparent}
+.netbar .nb-a:hover{background:var(--hov);color:var(--t1)}
+/* 验收条（P3）：一行折叠条替掉"又大又空"的根卡；点开才是 accept 清单 + 子代理 DAG */
+.aclx{border-top:1px solid var(--ln);border-bottom:1px solid var(--ln)}
+.aclx-h{display:flex;align-items:center;gap:8px;width:100%;height:32px;padding:0 2px;font-size:12px;color:var(--t3)}
+.aclx-h:hover{color:var(--t2)}
+.aclx-h .t{font-weight:var(--w-md);color:var(--t2)}
+.aclx-h .n,.aclx-h .s{font-variant-numeric:tabular-nums}
+.aclx-h .s{margin-left:auto;color:var(--t3)}
+.aclx .chev{width:12px;height:12px;flex:none;transition:transform var(--t-med) var(--e)}
+.aclx-h[aria-expanded="true"] .chev{transform:rotate(90deg)}
+.aclx-b{padding-bottom:2px}
+.aclx-b .acl-list{margin-top:0;border-top:0}
+/* 结论块（P4）：过程之前，页面上唯一"读"的内容 */
+.concl{padding:0}
+.concl-k{font-size:12px;color:var(--t3);margin-bottom:3px}
+/* 过程组头（P4）：统计行 + 折叠；点开是每条单行摘要（复用 S17 的 .stp） */
+.tlx-h{cursor:pointer;text-align:left;width:100%;align-items:center;gap:8px;border-radius:var(--r-ctl)}
+.tlx-h:hover{background:var(--hov)}
+.tlx-h .stats{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  font-variant-numeric:tabular-nums;color:var(--t3)}
+.tlx-h .stats b{font-weight:var(--w-md);color:var(--t2)}
+.tlx-h .chev{width:12px;height:12px;flex:none;color:var(--t3);transition:transform var(--t-med) var(--e)}
+.tlx-h[aria-expanded="true"] .chev{transform:rotate(90deg)}
+.sgrp{font-size:12px;color:var(--t3);padding:9px 2px 1px;border-top:1px solid var(--ln);margin-top:4px;
+  font-variant-numeric:tabular-nums}
+.sgrp:first-child{border-top:0;margin-top:0;padding-top:2px}
+/* 紧凑档（P14）：只留结论 + 每轮一行 N 步 / M 秒 / Σtok */
+.mini{display:flex;align-items:center;gap:10px;font-size:12px;color:var(--t3);
+  font-variant-numeric:tabular-nums;padding:2px 0}
+/* 等待态（P8）：一行 shimmer + 工具名 + 已用时；reduced-motion 退化静态 */
+.wait{display:flex;align-items:center;gap:9px;padding:2px 0}
+.wait .sh{width:6px;height:6px;border-radius:50%;background:var(--brand);flex:none;
+  animation:breath 1.9s var(--e) infinite}
+.wait .wk{font-size:13px;color:var(--t2);letter-spacing:.005em}
+@supports ((-webkit-background-clip:text) or (background-clip:text)){
+  .wait .wk{background:linear-gradient(90deg,var(--t2) 0%,var(--t2) 40%,var(--t1) 50%,var(--t2) 60%,var(--t2) 100%);
+    background-size:220% 100%;-webkit-background-clip:text;background-clip:text;
+    -webkit-text-fill-color:transparent;animation:shimmer 2.6s linear infinite}
+}
+@keyframes shimmer{from{background-position:120% 0}to{background-position:-120% 0}}
+/* 等你处理的行：不用 shimmer —— 球在人这边，不该假装"在跑" */
+.turn[data-s="blocked"] .tk{color:var(--warn)}
+/* 右栏空态（P17）：解释为什么空，不是一句"没有" */
+.empty-note.empty-2{display:flex;flex-direction:column;gap:3px;padding:12px 4px}
+.empty-note.empty-2 b{font-weight:var(--w-md);color:var(--t2);font-size:13px}
+.empty-note.empty-2 span{font-size:12px;line-height:1.6}
+.empty-note.empty-2 .hint{color:var(--t3)}
+
 .fadein{animation:fade var(--t-med) var(--e)}
 @keyframes fade{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
 </style>
@@ -585,7 +657,13 @@ button.stp-h:hover{background:var(--hov)}
     <div class="sb-top"><button class="newtask" id="newBtn">+ 新任务</button></div>
 
     <div class="sb-scroll">
-      <div class="sb-sec">进行中</div>
+      <div class="sb-sec" id="secWait" hidden>等你</div>
+      <div id="waitList"></div>
+
+      <div class="sb-sec" id="secFail" hidden>失败</div>
+      <div id="failList"></div>
+
+      <div class="sb-sec" id="secLive">进行中</div>
       <div id="runList"></div>
 
       <div class="sb-sec">已结束</div>
@@ -598,12 +676,20 @@ button.stp-h:hover{background:var(--hov)}
     <header class="th-head">
       <span class="crumb"><b id="thTitle">AICA 工作台</b></span>
       <span class="right">
+        <span class="st-word" id="thSt" hidden><i></i><span id="thStT"></span></span>
+        <button class="vb-btn" id="vbBtn" title="信息密度：详细 = 组头 + 每条单行；紧凑 = 只留结论 + 一行统计">详细</button>
         <button class="icon-btn" id="themeBtn" aria-label="切换主题">
           <svg class="i-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
           <svg class="i-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z"/></svg>
         </button>
       </span>
     </header>
+
+    <!-- S25/P16：断线态；覆盖在内容区顶部，不挤压布局 -->
+    <div class="netbar" id="netbar" hidden>
+      <span>桥已断开，正在重连…</span>
+      <button class="nb-a" id="netRetry">立即刷新</button>
+    </div>
 
     <div class="thread-scroll" id="threadScroll"><div class="col-inner" id="colInner"></div></div>
 
@@ -655,6 +741,15 @@ var approveArmAt = 0; /* 新审批卡出现后 500ms 内 Enter 不生效（防�
 var ST_LABEL = {working:"进行中", input:"等你回复", done:"已完成", queued:"排队中", dep:"等依赖", failed:"失败"};
 var WB_LABEL = {"person:answer":"你的回复", "dependency":"上游子任务"};
 
+/* ---------- S25：聚合四态 / 信息密度 / 折叠态 / 断线（P5/P6/P14/P16） ---------- */
+/* blocked 只来自"人在环"（未答 gate / 未答提问）；等依赖与排队算 working —— 与 view.ts aggOfNode 同规则 */
+var AGG_LABEL = {blocked:"等你", failed:"失败", working:"进行中", done:"已完成"};
+var VERB = (function(){ try{ return localStorage.getItem("aica-v1-verbosity")==="compact" ? "compact" : "rich"; }catch(e){ return "rich"; } })();
+var resolvedCount = 0;   /* 本场已裁决条数（右栏空态："N 条历史裁决已折叠"） */
+var aclOpen = (function(){ try{ return localStorage.getItem("aica-v1-acl")==="1"; }catch(e){ return false; } })();
+var groupOpen = (function(){ try{ return localStorage.getItem("aica-v1-group")!=="0"; }catch(e){ return true; } })();
+var netDown = false;
+
 var $ = function(s){ return document.querySelector(s); };
 var each = function(sel, fn){ Array.prototype.forEach.call(document.querySelectorAll(sel), fn); };
 /* 插值统一转义；inbox 的 d 字段是本地桥生成的受信 HTML（含 <code>），例外放行 */
@@ -678,8 +773,16 @@ function scheduleFetch(){
 function fetchView(){
   return fetch("/api/v1/view", {cache:"no-store"})
     .then(function(r){ if(!r.ok) throw new Error("HTTP "+r.status); return r.json(); })
-    .then(function(d){ applyView(d); return fetchApprovals(); })
-    .catch(function(){ /* 服务暂不可达：保留当前画面，等下一轮 */ });
+    .then(function(d){ applyView(d); setNet(false); return fetchApprovals(); })
+    .catch(function(){ setNet(true); /* 保留当前画面；"断开"由顶部黄条表达，不静默停在最后一条 delta（P16） */ });
+}
+/* ---------- S25/P16：断线态。唯一入口 setNet —— 显示由它一个地方决定 ---------- */
+function setNet(down){
+  down = !!down;
+  if(down === netDown){ return; }
+  netDown = down;
+  var el = $("#netbar");
+  if(el) el.hidden = !down;
 }
 
 /* ---------- S19 审批卡：GET /api/approvals（gate 写的卡，opts 由服务端生成，前端只渲染） ---------- */
@@ -715,11 +818,11 @@ function approvalTitle(a){
   var t = a.tool || "工具";
   return a.target ? t + " · " + a.target : t;
 }
+/* 只有「当前这条 run」的审批才接管输入框：别的 run 的待答卡在右栏，不该让这条 run 打不了字 */
 function pendingApprovalForComposer(){
-  if(!APPROVALS.length) return null;
   var rid = (RUNS[currentRun]||{}).id;
   for(var i=0;i<APPROVALS.length;i++) if(APPROVALS[i].run === rid) return APPROVALS[i];
-  return APPROVALS[0];
+  return null;
 }
 function syncComposer(){
   var ap = pendingApprovalForComposer();
@@ -730,16 +833,20 @@ function syncComposer(){
 function startPoll(){ if(!pollTimer) pollTimer = setInterval(fetchView, 5000); }
 function stopPoll(){ if(pollTimer){ clearInterval(pollTimer); pollTimer = null; } }
 function connectSSE(){
-  try{ es = new EventSource("/api/stream"); }catch(e){ startPoll(); return; }
-  es.onopen = function(){ stopPoll(); };
+  try{ es = new EventSource("/api/stream"); }catch(e){ setNet(true); startPoll(); return; }
+  es.onopen = function(){
+    stopPoll();
+    fetchView();   /* 重连成功：先以 /api/v1/view 全量校准，再撤黄条（不重放 delta） */
+  };
   es.onmessage = function(ev){
     try{
       var m = JSON.parse(ev.data);
       if(m && m.type === "change") scheduleFetch();
     }catch(e){}
   };
-  es.onerror = function(){ startPoll(); };  /* EventSource 自带重连；重连成功 onopen 停轮询 */
+  es.onerror = function(){ setNet(true); startPoll(); };  /* EventSource 自带重连；重连成功 onopen 停轮询 */
 }
+$("#netRetry").addEventListener("click",function(){ fetchView(); });
 
 /* ---------- OS 通知（S13/G17）：inbox 出现新条目 → Notification("aica", body=问题首行)。
    首拉只记录基线不弹；permission=default 时在首次交互/加载时申请一次 ---------- */
@@ -818,22 +925,38 @@ $("#themeBtn").addEventListener("click",function(){
 });
 
 /* ================= sidebar ================= */
-function pillOf(st){
-  if(st==="working") return '<span class="pill working"><i></i>进行中</span>';
-  if(st==="input")   return '<span class="pill input"><i></i>等你回复</span>';
-  if(st==="done")    return '<span class="pill"><i></i>已完成</span>';
-  if(st==="failed")  return '<span class="pill failed"><i></i>失败</span>';
-  return '<span class="pill"><i></i>空闲</span>';
+/* 四态色只表达紧急度：等你(琥珀) > 失败(玫瑰) > 进行中(clay=在场) > 已完成(中性) */
+function pillOf(a){
+  if(a==="blocked") return '<span class="pill blocked"><i></i>等你</span>';
+  if(a==="working") return '<span class="pill working"><i></i>进行中</span>';
+  if(a==="failed")  return '<span class="pill failed"><i></i>失败</span>';
+  return '<span class="pill"><i></i>已完成</span>';
+}
+function runCardHtml(r,i){
+  var a = aggOf(r);
+  var extra = (a==="blocked" && r.agg_n>1) ? '<span class="cnt num">'+r.agg_n+' 项</span>' : "";
+  return '<button class="run-card'+(i===currentRun?' on':'')+'" data-run="'+i+'">'+
+    '<span class="r1">'+pillOf(a)+extra+'<span class="dur num">'+esc(r.dur)+(r.spent?' · Σ'+fmtTok(r.spent):'')+'</span></span>'+
+    '<span class="ttl">'+esc(r.title)+'</span>'+
+    '<span class="meta">'+esc(r.snippet)+'</span></button>';
 }
 function renderSidebar(){
-  var live = RUNS.map(function(r,i){ return [r,i]; }).filter(function(p){ return p[0].status!=="done"; });
-  $("#runList").innerHTML = live.length ? live.map(function(p){
-    var r = p[0], i = p[1];
-    return '<button class="run-card'+(i===currentRun?' on':'')+'" data-run="'+i+'">'+
-      '<span class="r1">'+pillOf(r.status)+'<span class="dur num">'+esc(r.dur)+(r.spent?' · Σ'+fmtTok(r.spent):'')+'</span></span>'+
-      '<span class="ttl">'+esc(r.title)+'</span>'+
-      '<span class="meta">'+esc(r.snippet)+'</span></button>';
-  }).join("") : '<div class="empty-note">暂无运行中的任务</div>';
+  /* P5：按紧急度分三段 —— 等你 > 失败 > 进行中；done 沉到「已结束」，done 不冒泡 */
+  var wait = [], fail = [], live = [];
+  RUNS.forEach(function(r,i){
+    var a = aggOf(r);
+    if(a === "done") return;
+    if(a === "blocked") wait.push([r,i]);
+    else if(a === "failed") fail.push([r,i]);
+    else live.push([r,i]);
+  });
+  $("#secWait").hidden = !wait.length;
+  $("#waitList").innerHTML = wait.map(function(p){ return runCardHtml(p[0],p[1]); }).join("");
+  $("#secFail").hidden = !fail.length;
+  $("#failList").innerHTML = fail.map(function(p){ return runCardHtml(p[0],p[1]); }).join("");
+  $("#secLive").hidden = !live.length;
+  $("#runList").innerHTML = live.length ? live.map(function(p){ return runCardHtml(p[0],p[1]); }).join("")
+    : (!wait.length && !fail.length ? '<div class="empty-note">暂无运行中的任务</div>' : "");
   $("#settledList").innerHTML = SETTLED.length ? SETTLED.map(function(s,i){
     return '<div class="set-row"><button class="set-open" data-s="'+i+'"><span class="t">'+esc(s[0])+'</span><span class="tm">'+esc(s[1])+'</span></button>'+
       '<button class="set-del" data-s="'+i+'" aria-label="删除记录">×</button></div>';
@@ -923,45 +1046,28 @@ function grpHtml(tree,kids,lvl){
 function renderRun(silent){
   var r = RUNS[currentRun];
   var ci = $("#colInner");
-  if(!r){ /* 空态：无 run 时中栏安静提示 */
+  if(!r){ /* 空态：解释"为什么空、下一步能做什么"，不是一句"没有"（P17） */
     $("#thTitle").textContent = "AICA 工作台";
-    ci.innerHTML = '<div class="empty-note">暂无运行中的任务</div>';
+    setStatusWord(null);
+    ci.innerHTML = '<div class="empty-note empty-2"><b>还没有任务</b>'+
+      '<span>在下方输入框派发一件，或按 <b>/</b> 聚焦输入。</span>'+
+      '<span class="hint">有任务时，这里先给结论，再给过程。</span></div>';
     return;
   }
   $("#thTitle").textContent = r.title || "(未命名任务)";
+  setStatusWord(r);
 
   var h = "";
+  /* ① 用户消息：人话上下文。goal 不再在根卡里复述第二遍（P3 一条信息只出现一次） */
   if(r.req) h += '<div class="urow"><div class="ububble">'+esc(r.req)+'</div></div>';
-
-  /* 根卡 = 目标 + 验收清单；每个验收条目下挂着为它派出的子代理 */
-  h += '<div class="root-card">'+
-       '<div class="root-title">'+esc(r.title||"")+'</div><p class="root-obj">'+esc(r.obj||"")+'</p>';
-  if(r.chips.length){
-    h += '<div class="acl-list" id="tree">'+r.chips.map(function(c,i){
-        var kids = r.tree.filter(function(n){ return n.acl===i; });
-        return '<div class="acl-grp">'+aclHtml(c)+grpHtml(r.tree,kids,3)+'</div>';
-      }).join("")+'</div>';
-  }else if(r.tree.length){
-    /* 无验收清单时退化：树整体挂进根卡 */
-    h += '<div class="acl-list" id="tree"><div class="acl-grp">'+
-         grpHtml(r.tree, r.tree.filter(function(n){ return n.l==null||n.l===2; }), 3)+'</div></div>';
-  }
-  h += '</div>';
-
-  /* S17 顺序：用户 → 计划（根卡）→ 工具时间线 → 结论。原始事件不铺开（反模式 A-1）。 */
-  h += timelineHtml(r);
-  if(r.sum) h += '<div class="atext">'+esc(r.sum)+'</div>';   /* 结论 */
-
-  /* 状态行：进行中=最新一步在做什么（A8 心跳）；已结束=turn 结局闭集 + reason */
-  if(r.status==="working"){
-    var curStep = (r.steps||[]).filter(function(s){ return s.st==="run"; }).pop() || (r.steps||[]).slice(-1)[0];
-    var doing = curStep ? String(curStep.name+" "+(curStep.args||"")).slice(0,60) : "正在归纳子节点结论…";
-    h += '<div class="think"><span class="td"><i></i><i></i><i></i></span><span class="tk">进行中 · '+esc(doing)+'</span></div>';
-  }else{
-    h += turnHtml(r.turn, r.sum) ||
-      '<div class="think"><span class="td still"><i></i><i></i><i></i></span><span class="tk">'+
-        (r.status==="done" ? "已完成" : r.status==="failed" ? "已失败" : "已暂停 · 等你裁决后继续")+'</span></div>';
-  }
+  /* ② 结论：结论优先于过程（P4）；没有结论时不占位 */
+  if(r.sum) h += conclHtml(r);
+  /* ③ 验收条：一行折叠条，点开才是 accept 清单 + 子代理 DAG（P3） */
+  h += aclStripHtml(r);
+  /* ④ 过程：详细 = 组头 + 每条单行；紧凑 = 一行 N 步 / M 秒 / Σtok（P14） */
+  h += (VERB === "compact") ? miniHtml(r) : timelineHtml(r);
+  /* ⑤ 结局 / 等待：一行 shimmer + 工具名 + 已用时（P8），等工作时不假装在跑 */
+  h += statusLineHtml(r);
 
   var ts = $("#threadScroll");
   var atBottom = ts.scrollHeight - ts.scrollTop - ts.clientHeight < 40;
@@ -969,7 +1075,35 @@ function renderRun(silent){
   ci.innerHTML = h;
   if(!silent){ ci.classList.remove("fadein"); void ci.offsetWidth; ci.classList.add("fadein"); }
   else{ ts.scrollTop = atBottom ? ts.scrollHeight : oldTop; }  /* 静默刷新不打扰阅读位置 */
-  /* 点 = 就地展开/收起；行主体：有下级 → 选中 + 下钻页签；叶子 → 详情。› = 详情 */
+  bindAcl();
+  bindGroup();
+  bindTreeRows();
+  bindStepRows("#threadScroll", r.id, "root");
+  syncComposer();   /* 切 run 可能换掉"当前审批"：输入框语义跟着走（P11） */
+}
+/* P3：验收条的折叠态（localStorage 记住；默认折叠 = 一行） */
+function bindAcl(){
+  var b = $("#aclH"); if(!b) return;
+  b.addEventListener("click",function(){
+    aclOpen = !aclOpen;
+    try{ localStorage.setItem("aica-v1-acl", aclOpen ? "1" : "0"); }catch(e){}
+    b.setAttribute("aria-expanded", aclOpen ? "true" : "false");
+    var body = $("#aclB"); if(body) body.hidden = !aclOpen;
+  });
+}
+/* P4：过程组头的折叠（默认展开 = "详细"档；折叠后只剩统计行） */
+function bindGroup(){
+  var b = $("#tlxH"); if(!b) return;
+  b.addEventListener("click",function(){
+    groupOpen = !groupOpen;
+    try{ localStorage.setItem("aica-v1-group", groupOpen ? "1" : "0"); }catch(e){}
+    b.setAttribute("aria-expanded", groupOpen ? "true" : "false");
+    var body = $("#tlxB"); if(body) body.hidden = !groupOpen;
+    var hint = b.querySelector(".hint"); if(hint) hint.textContent = groupOpen ? "点收起" : "点展开每条";
+  });
+}
+/* 树行交互：有下级 → 选中 + 下钻页签；叶子 → 详情。› = 详情；✕ = 中止 */
+function bindTreeRows(){
   each("#tree .tn-row",function(el){
     el.addEventListener("click",function(e){
       var n = findNode(RUNS[currentRun].tree, el.parentElement.dataset.nm);
@@ -997,7 +1131,6 @@ function renderRun(silent){
       nodePost(n,"abort").then(scheduleFetch).catch(function(){ el.disabled = false; });
     });
   });
-  bindStepRows("#threadScroll", r.id, "root");
 }
 /* S17 工具行：点一行展开/折叠原文；展开态按 scope|行号 记住（SSE 静默刷新后不塌） */
 function bindStepRows(scopeSel, scope, nodePath){
@@ -1097,15 +1230,125 @@ function stepHtml(s, scope){
     '</button>'+
     '<div class="stp-out"><pre class="sh-log">'+esc(out.length ? out.join("\n") : "（无输出）")+'</pre>'+stepFootHtml(s)+'</div></li>';
 }
-/* run 详情的工具区：只在有 step 时出现（没有工具调用就不占位） */
+/* ---------- S25：结论块 / 验收条 / 过程组头（P3/P4/P14） ---------- */
+/* 结论：页面上唯一"读"的内容（衬线、正文级），与过程（等宽小字）形成层级差 */
+function conclHtml(r){
+  return '<div class="concl"><div class="concl-k">结论</div><div class="atext">'+esc(r.sum)+'</div></div>';
+}
+/* 验收条：一行折叠条替掉"又大又空"的根卡；点开才是 accept 清单 + 子代理 DAG */
+function aclStripHtml(r){
+  var chips = r.chips || [], tree = r.tree || [];
+  var hasChips = chips.length > 0;
+  var top = tree.filter(function(n){ return n.l==null || n.l===2; });
+  if(!hasChips && !top.length) return "";
+  var n = hasChips ? chips.length : top.length;
+  var ok = 0, bad = 0;
+  chips.forEach(function(c){ if(c[0]==="verified") ok++; else if(c[0]==="failed") bad++; });
+  var sum = hasChips
+    ? [ok ? ok+" ✓" : "", bad ? bad+" ×" : "", (n-ok-bad) ? (n-ok-bad)+" ○" : ""].filter(Boolean).join(" · ")
+    : n + " 个";
+  var body;
+  if(hasChips){
+    body = '<div class="acl-list" id="tree">'+chips.map(function(c,i){
+      var kids = tree.filter(function(x){ return x.acl===i; });
+      return '<div class="acl-grp">'+aclHtml(c)+grpHtml(tree,kids,3)+'</div>';
+    }).join("")+'</div>';
+  }else{
+    body = '<div class="acl-list" id="tree"><div class="acl-grp">'+grpHtml(tree, top, 3)+'</div></div>';
+  }
+  return '<section class="aclx"><button class="aclx-h" id="aclH" aria-expanded="'+(aclOpen?"true":"false")+'">'+
+    '<span class="t">'+(hasChips?"验收":"子任务")+'</span><span class="n">'+n+' 条</span>'+
+    '<span class="s">'+esc(sum)+'</span>'+CHEV+
+    '</button><div class="aclx-b" id="aclB"'+(aclOpen?"":" hidden")+'>'+body+'</div></section>';
+}
+/* 紧凑档：只留一行 N 步 / M 秒 / Σtok（P14） */
+function miniHtml(r){
+  var steps = Array.isArray(r.steps) ? r.steps : [];
+  if(!steps.length) return "";
+  var ms = 0, has = false;
+  steps.forEach(function(s){ if(typeof s.ms==="number"){ ms += s.ms; has = true; } });
+  return '<div class="mini"><span>'+steps.length+' 步</span>'+
+    (has ? '<span>'+stepMs(ms)+'</span>' : "")+
+    (r.spent ? '<span>Σ'+fmtTok(r.spent)+'</span>' : "")+'</div>';
+}
+function grpLabel(k){ return ({cmd:"命令", edit:"编辑", read:"读取", other:"调用"})[k] || "其他"; }
+/* 组头统计：3 命令 · 1 编辑 · 42s（跨段合计，与分段无关） */
+function statsLine(st){
+  if(!st || !st.n) return "";
+  var parts = (st.by || []).map(function(b){ return b.n+" "+grpLabel(b.key); });
+  if(st.ms != null && st.ms > 0) parts.push(stepMs(st.ms));
+  if(st.err) parts.push(st.err+" 步异常");
+  return parts.join(" · ");
+}
+/* run 详情的工具区：组头统计 +（点开）每条单行摘要。没有工具调用就不占位。 */
 function timelineHtml(r){
   var steps = Array.isArray(r.steps) ? r.steps : [];
   if(!steps.length) return "";
-  var bad = steps.filter(function(s){ return s.st==="err"||s.st==="lost"; }).length;
-  return '<div class="tlx"><div class="tlx-h"><b>工具</b><span>'+steps.length+' 步'+
-      (bad?' · <span style="color:var(--fig)">'+bad+' 步异常</span>':'')+'</span>'+
-      '<span class="hint">点一行展开原文</span></div>'+
-      '<ol class="steps">'+steps.map(function(s){ return stepHtml(s, r.id); }).join("")+'</ol></div>';
+  var groups = Array.isArray(r.groups) ? r.groups : [];
+  var stats = statsLine(r.stats) || (steps.length + " 步");
+  var body;
+  /* 每个连续段都只有一条时，副标题只是噪声（组头统计已经说清分类）→ 不渲染 */
+  var showSgrp = groups.length > 1 && groups.some(function(g){ return g.n > 1; });
+  if(showSgrp){
+    body = groups.map(function(g){
+      var arr = steps.slice(g.i0, g.i1+1);
+      return '<div class="sgrp">'+grpLabel(g.key)+' · '+g.n+(g.err ? ' · '+g.err+' 异常' : '')+'</div>'+
+        '<ol class="steps">'+arr.map(function(s){ return stepHtml(s, r.id); }).join("")+'</ol>';
+    }).join("");
+  }else{
+    body = '<ol class="steps">'+steps.map(function(s){ return stepHtml(s, r.id); }).join("")+'</ol>';
+  }
+  return '<div class="tlx"><button class="tlx-h" id="tlxH" aria-expanded="'+(groupOpen?"true":"false")+'">'+
+    '<b>过程</b><span class="stats">'+esc(stats)+'</span>'+
+    '<span class="hint">'+(groupOpen?"点收起":"点展开每条")+'</span>'+CHEV+
+    '</button><div class="tlx-b" id="tlxB"'+(groupOpen?"":" hidden")+'>'+body+'</div></div>';
+}
+/* ---------- S25：状态行（P5/P6/P8） ---------- */
+function aggOf(r){
+  if(!r) return "working";
+  if(r.agg) return r.agg;                            /* view.ts 的 max(子节点) 是唯一权威 */
+  return r.status === "input" ? "blocked" : (r.status || "working");
+}
+function fmtSec(ms){
+  var s = Math.max(0, Math.round(ms/1000));
+  if(s < 60) return s+"s";
+  var m = Math.floor(s/60), rest = s%60;
+  return m+"m"+(rest ? rest+"s" : "");
+}
+function runningStep(r){
+  var steps = Array.isArray(r.steps) ? r.steps : [];
+  for(var i=steps.length-1;i>=0;i--) if(steps[i].st==="run") return steps[i];
+  return null;
+}
+function statusLineHtml(r){
+  var a = aggOf(r);
+  if(a==="working"){
+    var st = runningStep(r);
+    if(st){
+      var t0 = Date.parse(st.ts) || Date.now();
+      return '<div class="wait"><span class="sh"></span><span class="wk" data-t0="'+t0+'" data-lbl="'+esc(st.name||"工具")+'">'+
+        '正在运行 '+esc(st.name||"工具")+' · '+fmtSec(Date.now()-t0)+'</span></div>';
+    }
+    return '<div class="wait"><span class="sh"></span><span class="wk">正在归纳子节点结论…</span></div>';
+  }
+  if(a==="blocked"){
+    var n = r.agg_n || 1;
+    return '<div class="turn" data-s="blocked"><span class="tk">等你处理</span><span class="tr">'+
+      n+' 项待裁决 · 右栏「需要你」</span></div>';
+  }
+  return turnHtml(r.turn, r.sum) ||
+    '<div class="think"><span class="td still"><i></i><i></i><i></i></span><span class="tk">'+
+      (a==="failed" ? "已失败" : "已完成")+'</span></div>';
+}
+/* 顶部文字状态：中栏唯一一处（P6 单一权威表达） */
+function setStatusWord(r){
+  var el = $("#thSt"), tx = $("#thStT");
+  if(!el || !tx) return;
+  if(!r){ el.hidden = true; return; }
+  var a = aggOf(r);
+  el.hidden = false;
+  el.dataset.s = a;
+  tx.textContent = (a==="blocked" && r.agg_n > 1) ? (AGG_LABEL[a]+" · "+r.agg_n) : (AGG_LABEL[a] || "");
 }
 var TURN_LABEL = {completed:"已完成","max-tokens":"被 token 上限截断",interrupted:"中断",cancelled:"已中止",failed:"失败",running:"进行中"};
 /* turn 结局一行：state 是闭集；reason 只在结论区没有说过时补一句（R1 一条信息只出现一次） */
@@ -1322,6 +1565,15 @@ function renderSubs(nd){
 }
 
 /* ================= inbox ================= */
+/* P17：空态要解释"为什么空、下一步能做什么"，不是一句"没有需要你处理的事" */
+function emptyInboxHtml(){
+  var head = RUNS.length ? "这个 run 没有待裁决项" : "还没有任务";
+  var why = resolvedCount
+    ? resolvedCount + " 条历史裁决已折叠"
+    : (RUNS.length ? "审批与提问会出现在这里，回答后自动折叠" : "派发任务后，需要你决定的事会出现在这里");
+  return '<div class="empty-note empty-2"><b>'+esc(head)+'</b><span>'+esc(why)+'</span>'+
+    '<span class="hint">下一步：在下方输入框派发新任务，或看「产物」。</span></div>';
+}
 function inboxLeft(){ return INBOX.filter(function(c){ return !c.done; }).length; }
 function renderBadge(){
   var n = inboxLeft(), b = $("#rpInboxBdg");
@@ -1330,7 +1582,7 @@ function renderBadge(){
 function renderInbox(){
   $("#pane-inbox").innerHTML = INBOX.length ? INBOX.map(function(c){
     return c.kind === "approve" ? approvalCardHtml(c) : gateCardHtml(c);
-  }).join("") : '<div class="empty-note">没有需要你处理的事</div>';
+  }).join("") : emptyInboxHtml();
   each("#pane-inbox .opt",function(el){
     el.addEventListener("click",function(){
       var card = el.closest(".incard");
@@ -1420,6 +1672,7 @@ function resolveCard(card, verdict, label){
   var settle = function(){
     c.done = true;
     resolvedIds[c.id] = 1;
+    resolvedCount += 1;   /* 右栏空态："N 条历史裁决已折叠" */
     card.classList.add("res");
     card.querySelector(".verdict").textContent = verdict;
     renderBadge();
@@ -1459,7 +1712,7 @@ function decideApproval(card, c, body, label){
         {method:"POST", headers:{"content-type":"application/json"}, body:JSON.stringify(body)})
     .then(function(r){ if(!r.ok) throw new Error("HTTP "+r.status); return r.json(); })
     .then(function(d){
-      c.pending = false; c.done = true; resolvedIds[c.id] = 1;
+      c.pending = false; c.done = true; resolvedIds[c.id] = 1; resolvedCount += 1;
       APPROVALS = APPROVALS.filter(function(x){ return x.id !== c.id; });
       if(card){
         card.classList.add("res");
@@ -1513,7 +1766,7 @@ function resolveGate(g){
       settle(p, {t:"刚刚", a:"子任务「"+n.nm+"」恢复执行", st:"ok"});
     }
   }
-  if(!r.tree.some(function(x){ return x.st==="input"; })) r.status = "working";
+  if(!r.tree.some(function(x){ return x.st==="input"; })){ r.status = "working"; if(r.agg==="blocked") r.agg = "working"; }
   r.snippet = g.sn || r.snippet;
   renderSidebar();
   if(currentRun===g.run){ renderRun(true); renderSubs(null); }
@@ -1622,7 +1875,29 @@ cText.addEventListener("keydown",function(e){
 });
 $("#newBtn").addEventListener("click",function(){ cText.focus(); });
 
+/* ================= S25：信息密度两档（P14） ================= */
+function applyVerb(){
+  document.body.dataset.verbosity = VERB;
+  var b = $("#vbBtn");
+  if(b) b.textContent = VERB === "compact" ? "紧凑" : "详细";
+}
+$("#vbBtn").addEventListener("click",function(){
+  VERB = (VERB === "compact") ? "rich" : "compact";
+  try{ localStorage.setItem("aica-v1-verbosity", VERB); }catch(e){}
+  applyVerb();
+  renderRun(true);
+});
+/* 等待态计时：只改文本、不重排（P8）；没有 [data-t0] 时什么都不做 */
+setInterval(function(){
+  each("[data-t0]",function(el){
+    var t0 = +el.dataset.t0 || 0;
+    if(!t0) return;
+    el.textContent = "正在运行 " + (el.dataset.lbl || "工具") + " · " + fmtSec(Date.now() - t0);
+  });
+}, 1000);
+
 /* ================= boot ================= */
+applyVerb();
 renderSidebar();
 renderInbox();
 renderRun(true);

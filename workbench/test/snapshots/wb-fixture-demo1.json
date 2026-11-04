@@ -4,6 +4,8 @@
    "id": "wb-fixture-demo1",
    "title": "workbench 冒烟夹具",
    "status": "failed",
+   "agg": "failed",
+   "agg_n": 2,
    "dur": "1315:03",
    "spent": 7960,
    "snippet": "Worker 退出（code -1） · Error: spawn claude ENOENT",
@@ -99,6 +101,7 @@
       "reason": "接口清单已产出：artifacts/接口清单.md（envelope + runs 共 8 个导出）",
       "code": 0
      },
+     "agg": "done",
      "compactions": []
     },
     {
@@ -123,6 +126,7 @@
       "reason": "Worker 异常退出（code -1）：Error: spawn claude ENOENT——详见节点 events.jsonl",
       "code": -1
      },
+     "agg": "failed",
      "compactions": []
     },
     {
@@ -166,6 +170,7 @@
       "reason": "输入 ref 未物化到节点目录，read 失败退出",
       "code": 1
      },
+     "agg": "failed",
      "compactions": []
     }
    ],
@@ -177,6 +182,14 @@
     }
    ],
    "steps": [],
+   "groups": [],
+   "stats": {
+    "by": [],
+    "n": 0,
+    "ms": null,
+    "err": 0,
+    "run": 0
+   },
    "turn": {
     "state": "failed",
     "reason": "Worker 异常退出（code -1）：Error: spawn claude ENOENT——详见节点 events.jsonl",

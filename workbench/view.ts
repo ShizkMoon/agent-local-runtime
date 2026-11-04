@@ -51,6 +51,123 @@ export interface StepView {
   call_id: string | null;
 }
 
+// ---------------------------------------------------------------- S25：分组与聚合（P4/P5/P6/P14）
+
+/** 聚合四态：blocked（等你）/ failed / working / done。rank 越大越紧急 */
+export type AggStatus = "blocked" | "failed" | "working" | "done";
+
+/** 只在这里定义紧急度；别处不许自己排序（P5 单一权威） */
+export const AGG_RANK: Record<AggStatus, number> = { done: 0, working: 1, failed: 2, blocked: 3 };
+
+/**
+ * 节点状态 → 四态。
+ * blocked **只**来自「人在环」：st=input（未答 gate / 未答提问）。
+ * 等依赖（dep）与排队（queued）不占人工位，按 working 算——不然父行永远在喊「等你」。
+ */
+export function aggOfNode(st: string): AggStatus {
+  if (st === "input") return "blocked";
+  if (st === "failed") return "failed";
+  if (st === "done") return "done";
+  return "working";
+}
+
+/** 聚合取最紧急；空集合 = done（没有节点就没有未完成的事） */
+export function aggMax(list: AggStatus[]): AggStatus {
+  let best: AggStatus = "done";
+  for (const a of list) if (AGG_RANK[a] > AGG_RANK[best]) best = a;
+  return best;
+}
+
+/**
+ * 节点四态：先看"有没有未答审批"，再看 st。
+ * 未答 gate-req 的节点没有 result.json（worker 卡在 gate 里），st 是 queued —— 但人这边它就是"等你"。
+ */
+export function nodeAgg(st: string, approval = false): AggStatus {
+  return approval ? "blocked" : aggOfNode(st);
+}
+
+/** 工具分类：只影响统计行，不影响任何真相 */
+export type GroupKey = "cmd" | "edit" | "read" | "other";
+
+/** 连续同类的一串 step（保持时间顺序；渲染按它分段） */
+export interface StepGroupView {
+  key: GroupKey;
+  /** 组内条数 */
+  n: number;
+  /** 组内已知耗时合计 ms；一条都没有 ms 时为 null（不拿 0 冒充） */
+  ms: number | null;
+  /** 失败或丢失（err/lost）条数 */
+  err: number;
+  /** 在 steps[] 里的闭区间下标 */
+  i0: number;
+  i1: number;
+}
+
+/** 组头统计（"3 命令 · 1 编辑 · 42s" 的数据来源）：按分类全量合计，与分段无关 */
+export interface StepStats {
+  /** 只含 n>0 的键，顺序 cmd → edit → read → other */
+  by: { key: GroupKey; n: number }[];
+  n: number;
+  /** 已知耗时合计；全都没有 ms 时 null */
+  ms: number | null;
+  /** err/lost 条数 */
+  err: number;
+  /** 进行中条数 */
+  run: number;
+}
+
+const CMD_TOOLS = new Set(["bash", "sh", "shell", "exec", "cmd", "pwsh", "powershell", "terminal", "run"]);
+const EDIT_TOOLS = new Set(["edit", "write", "add", "delete", "patch", "apply_patch", "file_edit", "mkdir", "mv", "cp", "rm"]);
+const READ_TOOLS = new Set(["read", "glob", "grep", "ls", "list", "view", "stat", "open", "fetch", "webfetch", "websearch", "web_search", "search"]);
+
+/** step → 组：kind=edit 一律归编辑；其余看工具名首词，未知归 other */
+export function groupOfStep(s: StepView): GroupKey {
+  if (s.kind === "edit") return "edit";
+  const head = String(s.name || "").toLowerCase().split(/[\s:/]/)[0];
+  if (CMD_TOOLS.has(head)) return "cmd";
+  if (EDIT_TOOLS.has(head)) return "edit";
+  if (READ_TOOLS.has(head)) return "read";
+  return "other";
+}
+
+/** 连续同类合并（时间顺序不乱）；渲染用它分段 */
+export function groupSteps(steps: StepView[]): StepGroupView[] {
+  const out: StepGroupView[] = [];
+  for (let i = 0; i < steps.length; i++) {
+    const key = groupOfStep(steps[i]);
+    const bad = steps[i].st === "err" || steps[i].st === "lost";
+    const last = out[out.length - 1];
+    if (last && last.key === key) {
+      last.n += 1;
+      last.i1 = i;
+      if (bad) last.err += 1;
+      if (typeof steps[i].ms === "number") last.ms = (last.ms ?? 0) + steps[i].ms;
+    } else {
+      out.push({
+        key, n: 1, i0: i, i1: i, err: bad ? 1 : 0,
+        ms: typeof steps[i].ms === "number" ? steps[i].ms : null,
+      });
+    }
+  }
+  return out;
+}
+
+/** 组头统计：按分类全量合计（跨段合并），耗时只在有 ms 时给 */
+export function stepStats(steps: StepView[]): StepStats {
+  const counts: Record<GroupKey, number> = { cmd: 0, edit: 0, read: 0, other: 0 };
+  let ms: number | null = null, err = 0, run = 0;
+  for (const s of steps) {
+    counts[groupOfStep(s)] += 1;
+    if (typeof s.ms === "number") ms = (ms ?? 0) + s.ms;
+    if (s.st === "err" || s.st === "lost") err += 1;
+    if (s.st === "run") run += 1;
+  }
+  const by = (["cmd", "edit", "read", "other"] as GroupKey[])
+    .filter(k => counts[k] > 0)
+    .map(k => ({ key: k, n: counts[k] }));
+  return { by, n: steps.length, ms, err, run };
+}
+
 /** turn 结局闭集（A9）：max-tokens 压过 completed；interrupted 由"有 spawn 无 exit"合成 */
 export type TurnState = "running" | "completed" | "max-tokens" | "interrupted" | "cancelled" | "failed";
 
@@ -99,6 +216,8 @@ export interface TreeNodeView {
   /** 等待对象：person:answer / dependency */
   wb: string;
   turn: TurnView;
+  /** S25：该节点的四态（blocked 只来自未答 gate/提问） */
+  agg: AggStatus;
   /** S20：该节点发生过的上下文压缩（compaction 三事件投影） */
   compactions: CompactionView[];
 }
@@ -107,6 +226,10 @@ export interface RunView {
   id: string;
   title: string;
   status: "done" | "input" | "failed" | "working";
+  /** S25：run 行只能看这个 —— max(所有节点)，blocked > failed > working > done；done 不冒泡 */
+  agg: AggStatus;
+  /** 处于 agg 那一档的节点数（"等你 · 2"） */
+  agg_n: number;
   dur: string;
   spent: number | null;
   snippet: string;
@@ -118,6 +241,9 @@ export interface RunView {
   arts: ArtView[];
   /** 根节点工具步骤（S17：Run 详情的工具时间线） */
   steps: StepView[];
+  /** S25：连续同类的分段（渲染用）与全量统计（组头行用） */
+  groups: StepGroupView[];
+  stats: StepStats;
   /** 根节点 turn 结局 */
   turn: TurnView;
   /** S20：根节点发生过的压缩（子节点的在 tree[].compactions 上） */
@@ -590,11 +716,32 @@ function viewStatus(runsDir: string, rootId: string, spec: any, r: any): string 
   return "queued";
 }
 
+/**
+ * gate-req 是否仍未答（req 在 / 未超 TTL / 没有比 req 更新的 gate-ans）。
+ * 与 server.ts 的 pendingApproval 同一份契约；S21 把 approvals 并进 view 后这段应删。
+ */
+const APPROVAL_REQ = "gate-req.json";
+const APPROVAL_ANS = "gate-ans.json";
+const APPROVAL_TTL_MS = 10 * 60_000;
+export function pendingApproval(dir: string, now: number): boolean {
+  const req = join(dir, APPROVAL_REQ);
+  if (!existsSync(req)) return false;
+  let reqMs = 0;
+  try { reqMs = statSync(req).mtimeMs; } catch { return false; }
+  const ans = join(dir, APPROVAL_ANS);
+  if (existsSync(ans)) {
+    try { if (statSync(ans).mtimeMs >= reqMs) return false; } catch { /* ans 刚被清：当未答 */ }
+  }
+  return now - reqMs <= APPROVAL_TTL_MS;
+}
+
 interface NodeProj {
   path: string;
   spec: any;
   r: any;
   gate: any;
+  /** S25：有没有未答审批（决定 agg=blocked） */
+  approval: boolean;
   st: string;
   live: boolean;
   cur: string | null;
@@ -641,6 +788,7 @@ function projectNode(runsDir: string, rootId: string, path: string, now: number,
     : [];
   return {
     path, spec, r, gate,
+    approval: pendingApproval(dir, now),   // S25：未答审批也算"人在环"
     st: viewStatus(runsDir, rootId, spec, r),
     // S10 控制面投影：live=worker.json 租约在、cur=尾事件工具/动作、spent=token 累计、wait=waiting 原因
     live,
@@ -703,8 +851,9 @@ export function buildView(runsDir: string, opts: ViewOptions = {}): ViewPayload 
         l: n.path.split("/").length, acl: n.spec?.accept_idx ?? 0, st: n.st, nm: n.nm, d: n.d, el: n.el,
         path: n.path, sum: n.sum, steps: n.steps, out: n.out, // sheet 用：定位/小结/执行过程/产物
         live: n.live, cur: n.cur, spent: n.spent, wait: n.wait, todo: n.todo, // S10：live ✕ / Σtok / 回复框；S9：清单
-        wb: n.st === "input" ? "person:answer" : n.st === "dep" ? "dependency" : "", // wb=等待对象：等人答/等依赖
+        wb: n.approval ? "person:answer" : n.st === "input" ? "person:answer" : n.st === "dep" ? "dependency" : "", // wb=等待对象：等人答/等依赖
         turn: n.turn,
+        agg: nodeAgg(n.st, n.approval),   // S25：节点四态（与 run 行同一套；未答审批 = 等你）
         compactions: n.compactions,
       }));
     // arts：全部节点 artifacts/ 汇总到 run 级；非 root 节点的 fn 带 path 前缀防重名
@@ -727,8 +876,14 @@ export function buildView(runsDir: string, opts: ViewOptions = {}): ViewPayload 
     const last = runPulseFrom(nodes);
     // S6：run 行 Σtok = 各节点 spent（result.spent 或 usage.json）累加
     const spentTotal = nodes.reduce((s, n) => s + (typeof n.spent === "number" ? n.spent : 0), 0);
+    // S25：run 行状态 = max(所有节点)。blocked > failed > working > done；done 不冒泡（P5）
+    const aggList = nodes.map(n => nodeAgg(n.st, n.approval));
+    // 还没有任何节点 = 还没开始（不是 done）；有节点才按最紧急聚合
+    const agg = aggList.length ? aggMax(aggList) : "working";
+    const rootSteps = rootNode?.steps ?? [];
     runs.push({
       id: rootId, title: meta?.subject ?? rootId, status,
+      agg, agg_n: aggList.filter(a => a === agg).length,
       dur: mmss((ended ? Date.parse(ended) : now) - Date.parse(meta?.created_at ?? new Date(now).toISOString())),
       spent: spentTotal || null,
       snippet: last?.hint ?? "",
@@ -736,7 +891,9 @@ export function buildView(runsDir: string, opts: ViewOptions = {}): ViewPayload 
       obj: String(rootNode?.spec?.goal ?? "").split("\n")[0].slice(0, 80), // 目标（根 goal 首行）
       sum: rootNode?.r?.summary ?? "",                                   // 摘要（根 result）
       chips, tree, arts,
-      steps: rootNode?.steps ?? [],                                      // S17：Run 详情工具时间线
+      steps: rootSteps,                                                  // S17：Run 详情工具时间线
+      groups: groupSteps(rootSteps),                                     // S25：渲染分段（时间顺序）
+      stats: stepStats(rootSteps),                                       // S25：组头统计（N 命令 · M 编辑 · 42s）
       turn: runTurn,
       compactions: rootNode?.compactions ?? [],                          // S20：根节点的压缩记录
     });

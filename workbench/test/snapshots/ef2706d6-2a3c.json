@@ -4,6 +4,8 @@
    "id": "ef2706d6-2a3c",
    "title": "smoke test",
    "status": "working",
+   "agg": "working",
+   "agg_n": 0,
    "dur": "976:08",
    "spent": null,
    "snippet": "",
@@ -14,6 +16,14 @@
    "tree": [],
    "arts": [],
    "steps": [],
+   "groups": [],
+   "stats": {
+    "by": [],
+    "n": 0,
+    "ms": null,
+    "err": 0,
+    "run": 0
+   },
    "turn": {
     "state": "running",
     "reason": null,
