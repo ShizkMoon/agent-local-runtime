@@ -15,8 +15,13 @@
    `AICA_STATE`（缺省 `%LOCALAPPDATA%\aica\state`），输出落
    `<AICA_STATE>\workbench-server.log`，`CREATE_NO_WINDOW` 保证不弹控制台；
 4. 轮询 `GET /api/v1/view` 直到 200（每 250ms，15s 超时 → 原生报错对话框后退出）；
-5. 开 1440×900 窗口「AICA 工作台」加载 `/v1/index.html`；退出（窗口全关/Quit）
-   只杀自己拉起的 node——复用的不动，桥内 detached 的 ar daemon 也不管。
+5. 开 1440×900 窗口「AICA 工作台」加载 `/v1/index.html`；关窗口 = 收起到托盘，
+   托盘「退出」才真正退出；退出时只杀自己拉起的 node——复用的不动，桥内 detached
+   的 ar daemon 也不管。
+6. 窗口位置/大小/最大化记在 `<AICA_STATE>\window.json`，下次启动恢复；显示器拔掉
+   导致原坐标不可见时，MyGo 会夹到主屏工作区并居中，不会把窗口丢到屏幕外。
+7. 全局热键 `Ctrl+Alt+A` 显隐窗口；拖文件进窗口会在 composer 插入 `@绝对路径`；
+   磁盘代码比运行中的桥新时，窗口底部弹一次「代码已更新，重启生效」。
 
 壳自己的日志落 `<AICA_STATE>\workbench-shell.log`（GUI 子系统没有 stderr，
 启动失败只能从这里查；超过 1MB 自动清空重写）。
@@ -31,6 +36,90 @@
    `<dir>/server.ts`，要求同级有 `public/` 或 `src/` 作为标记——覆盖
    `dist/windows-amd64/` 这类打包位置；
 5. cwd 逐级上溯 ≤8 层，同上。
+
+## 托盘与热键
+
+### 窗口记忆 `window.json`
+
+`<AICA_STATE>\window.json`（缺省 `%LOCALAPPDATA%\aica\state\window.json`），
+就是 `mygo.WindowState` 的 JSON：
+
+```json
+{ "x": 200, "y": 120, "width": 1440, "height": 900, "maximized": false }
+```
+
+- 壳用 `mygo.App.SetWindowStateStore` 替换了 MyGo 默认的 `window-state.json`，
+  写入走「临时文件 + rename」，窗口移动/缩放后 300ms 防抖捕获，关闭/退出时落盘；
+- 启动时 MyGo 的 `restoreWindowState` 负责恢复；坐标不在任何显示器工作区、
+  或尺寸大于工作区时，它会夹到主屏工作区并居中（多显示器拔掉后的兜底），
+  所以**不会恢复到屏幕外**；
+- 只记主窗口（StateKey `main`）；改 `AICA_STATE` 即换一套记忆。
+
+### 托盘（`resources/icon.png`）
+
+- 菜单三项：**显示工作台** / **新建任务**（显示窗口并聚焦 composer）/**退出**；
+- 点窗口关闭按钮 = `OnClose` 里 `PreventDefault` + `Hide`，进程留在托盘；
+  托盘「退出」才会 `Quit`（并把 `nodeCmd` 指向的桥杀掉，复用的桥不动）；
+- 首次收起发一条系统通知说明「仍在运行 + 热键」，标记文件
+  `<AICA_STATE>\tray-hint-shown` 保证只提示一次；
+- MyGo 托盘只收 PNG 字节，所以运行时用 `resources/icon.png`（`go:embed` 内嵌）；
+  `resources/icon.ico` 继续给 `mygo.json` 打包 exe 图标用。
+
+### 全局热键 `Ctrl+Alt+A`
+
+- `mygo.GlobalShortcut.Register("CmdOrCtrl+Alt+A", ...)`：Windows 上就是
+  `RegisterHotKey` + 应用消息循环（`WM_HOTKEY`），不是壳自己开的窗口钩子；
+- 行为：窗口在前台 → 收起；否则显示/还原并聚焦；
+- 注册失败（被别的程序占用）只在 `workbench-shell.log` 记一行，**不阻断启动**，
+  窗口/tray 照常可用；退出时 `UnregisterAll`。
+
+### 拖文件 → composer 插入 `@path`
+
+不改 `public/v1/index.html`，由 `WindowOptions.Page.PreloadScript` 注入：
+
+1. `dragenter/dragover/drop` 一律 `preventDefault`，WebView2 不会把窗口导航到
+   被拖入的 `file://` 文件；`OnWillNavigate` 再兜一层，`file:`/`data:`/`blob:`
+   导航一律拦掉，外链交给系统浏览器；
+2. MyGo 在原生 surface 层接管文件拖放，`OnFileDrop` 拿到绝对路径；
+   壳把 `http://127.0.0.1:4399` 放进 `PageOptions.TrustedOrigins`，页面因此能收到
+   `mygo:file-drop` 事件，preload 监听后插入到 `#cText`；
+3. 插入格式：普通路径 `@C:\a\b.txt`，含空格/引号 `@"C:\sp ace\c.txt"`；
+   用 `setRangeText` 等价逻辑改 `value` 并派发 `input`，页面的 autogrow/发送
+   逻辑能感知；
+4. 页面将来若自己处理 DOM `drop`，置 `window.__aicaHandlesDrop = true` 即可让
+   preload 不再重复插入（也可直接调 `window.__aicaInsertPaths(paths)`）。
+
+### 更新提示（静默不重启）
+
+启动时读一次 `GET /api/health`（`version` + `uptime_s`），与仓库根
+`package.json` 的 `version`、以及 `workbench/server.ts` / `docs/prd-workbench-v3.md`
+的 mtime 比较：磁盘版本更高，或代码 mtime 晚于桥的启动时间，就在页面底部渲染
+一枚「代码已更新，重启工作台后生效」提示（15s 自动消失，可点掉）。
+
+- 只提示，**绝不自动重启**；
+- 同一「磁盘版本 + mtime」只提示一次，记录在 `<AICA_STATE>\update-notice.json`；
+- 拿不到 `/api/health` 或推不出仓库根时静默跳过，不影响启动。
+
+### 状态文件一览
+
+| 文件 | 用途 |
+| --- | --- |
+| `window.json` | 主窗口位置/大小/最大化 |
+| `tray-hint-shown` | 首次收起托盘提示的一次性标记 |
+| `update-notice.json` | 已提示过的磁盘版本 + 代码 mtime |
+| `workbench-shell.log` | 壳日志（含托盘/热键/更新判定结果） |
+| `workbench-server.log` | 壳拉起的 node 桥输出 |
+
+### 自检
+
+```sh
+cd workbench/shell
+go build ./...        # 编译
+go test ./...         # window.json 往返/损坏兜底、preload 在 node DOM 桩里验证
+                      # 拖拽 preventDefault、@path 插入、更新提示渲染
+```
+
+preload 的 node 行为测试需要 `PATH` 里有 node；没有就自动 skip。
 
 ## 前提
 

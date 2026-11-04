@@ -1,3 +1,5 @@
 aica-workbench.exe
+aica-workbench-shell.exe
+*~
 build/
 .mygo/
