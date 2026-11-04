@@ -600,6 +600,8 @@ button.stp-h:hover{background:var(--hov)}
 .netbar .nb-a:hover{background:var(--hov);color:var(--t1)}
 /* 验收条（P3）：一行折叠条替掉"又大又空"的根卡；点开才是 accept 清单 + 子代理 DAG */
 .aclx{border-top:1px solid var(--ln);border-bottom:1px solid var(--ln)}
+/* 单轮 run 不再有用户气泡：验收条变成首块，补一点上边距，别顶在标题栏下沿（P3 的副作用） */
+#colInner > .aclx:first-child{margin-top:10px}
 .aclx-h{display:flex;align-items:center;gap:8px;width:100%;height:32px;padding:0 2px;font-size:12px;color:var(--t3)}
 .aclx-h:hover{color:var(--t2)}
 .aclx-h .t{font-weight:var(--w-md);color:var(--t2)}
@@ -1058,8 +1060,8 @@ function renderRun(silent){
   setStatusWord(r);
 
   var h = "";
-  /* ① 用户消息：人话上下文。goal 不再在根卡里复述第二遍（P3 一条信息只出现一次） */
-  if(r.req) h += '<div class="urow"><div class="ububble">'+esc(r.req)+'</div></div>';
+  /* ① 用户消息：只有它带来"标题没说过的话"时才渲染（P3 一条信息只出现一次） */
+  if(showUserBubble(r)) h += '<div class="urow"><div class="ububble">'+esc(r.req)+'</div></div>';
   /* ② 结论：结论优先于过程（P4）；没有结论时不占位 */
   if(r.sum) h += conclHtml(r);
   /* ③ 验收条：一行折叠条，点开才是 accept 清单 + 子代理 DAG（P3） */
@@ -1235,6 +1237,15 @@ function stepHtml(s, scope){
 function conclHtml(r){
   return '<div class="concl"><div class="concl-k">结论</div><div class="atext">'+esc(r.sum)+'</div></div>';
 }
+/* P3：goal 只出现一次。单轮 run 里 subject 就是用户原话（view.ts 的 title 与 req 同源），
+   气泡属于纯复述 → 不渲染；只有当 req 携带了标题没有的信息（编排器改写 subject / 将来多轮气泡
+   = 第 N 轮原话）时才渲染。多轮判据今天 view 没有暴露"用户轮数"，等 M9 的 reply 投影落地后
+   在这里加一个 user_msgs 判断即可，其余代码不用动。 */
+function showUserBubble(r){
+  if(!r || !r.req) return false;
+  var q = String(r.req).trim(), t = String(r.title || "").trim();
+  return !(t && q === t);
+}
 /* 验收条：一行折叠条替掉"又大又空"的根卡；点开才是 accept 清单 + 子代理 DAG */
 function aclStripHtml(r){
   var chips = r.chips || [], tree = r.tree || [];
@@ -1336,9 +1347,20 @@ function statusLineHtml(r){
     return '<div class="turn" data-s="blocked"><span class="tk">等你处理</span><span class="tr">'+
       n+' 项待裁决 · 右栏「需要你」</span></div>';
   }
-  return turnHtml(r.turn, r.sum) ||
-    '<div class="think"><span class="td still"><i></i><i></i><i></i></span><span class="tk">'+
-      (a==="failed" ? "已失败" : "已完成")+'</span></div>';
+  return turnRowHtml(r);
+}
+/* P6：结局行只在"需要解释"时出现。completed 且没有额外 reason → 由顶部状态承担，不再重复「已完成」；
+   cancelled 没说原因同理；failed / max-tokens / interrupted 是异常，至少留一行。
+   reason 与结论同句（前面的结论已经说过）也不重复。 */
+function turnRowHtml(r){
+  var t = r.turn || {}, st = t.state || "running";
+  if(st === "running") return "";
+  var reason = String(t.reason || "").trim();
+  var dup = !!(reason && r.sum && String(r.sum).indexOf(reason.slice(0, 24)) >= 0);
+  var exceptional = (st === "failed" || st === "max-tokens" || st === "interrupted");
+  if(!exceptional && !reason) return "";   /* 正常完成 / 未说明的中止：顶部状态已经说了 */
+  if(dup) return "";                        /* 结论里已有同一句话 */
+  return turnHtml(t, r.sum);
 }
 /* 顶部文字状态：中栏唯一一处（P6 单一权威表达） */
 function setStatusWord(r){
