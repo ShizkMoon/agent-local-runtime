@@ -1,68 +1,62 @@
-# agent-local-runtime · AICA 工作台
+# agent-local-runtime
 
-> **这是一个半成品。** 能跑、能用、每天在用，但离"完工"还差一截——文末「已知未完成」把这些缺口逐条列出来了，
-> 不粉饰、不写成 roadmap 里的"即将支持"。仓库公开是为了留个可核对的过程，不是发布产品。
+本地 Agent 运行时与 Windows 工作台。
 
-一个本地优先的 Agent 运行时 + Windows 客户端。核心是 `ar`（运行时 CLI）与 `aica-pi`（Pi 的扩展包），
-上面是工作台（WebView2 客户端 + 本地桥 + 单页 UI）。设计目标是：**看得懂、能干预、可解释、可自进化**。
+**状态：半成品。** 日常在用，但不完整——「没做完的」一节列了具体缺口。
 
-## 设计初衷
+## 为什么做这个
 
-1. **Agent 应该有个"工作台"，而不是一个聊天框。** 三栏：左边是任务，中间是这件事怎么发生的，
-   右边是"现在需要你做什么"。中间永远结论在前、过程在后——先看到结果，想追问再展开命令。
-2. **审批要能被解释，而不是弹一个"允许/拒绝"。** 每张卡说清楚"要做什么、为什么、影响谁"，
-   动作由服务端生成（闭集），危险路径（`rm -rf /`、家目录、控制面文件）直接硬拒，不进审批。
-3. **薄核心 + 扩展。** 照 Pi 的哲学：agent loop 与基础工具之外，能力都放在
-   `extensions/`（工具与门禁）、`skills/`（做法）、`hooks/`（生命周期）、`prompts/`（角色）里，
-   加能力不改核心。
-4. **可自进化。** Agent 可以对自己的仓库提"提案"（`ev_propose`）——提案是文件（diff + 验收命令），
-   必须人审、必须跑验收、必须能字节级回滚。它不能直接改自己；它能提议，人来批。
-5. **可恢复。** 进程会死、桥会断、机器会重启。孤儿节点不会重放（标 `orphaned`），
-   事件带 `seq`，中断后能从 checkpoint 接着走，分叉走 fork。
+现有 CLI Agent（Codex、Claude Code 这类）能力很强，但有两个问题：工具调用与审批过程基本不可见、不可干预；
+想改它的行为只能等上游。这个项目的出发点是：
 
-## 现在有什么（可用）
+- **过程可读**：一次任务先给结论，再按需展开每一步的命令、参数、输出、耗时、退出码。
+- **审批可解释**：每个待批准的动作说清楚要做什么、为什么、影响什么；危险路径（删根目录、家目录、控制面文件）直接拒绝，不弹卡。
+- **核心小、能力外挂**：按 Pi 的做法，工具、做法（skills）、生命周期（hooks）、角色提示词都放在扩展包里，加能力不动核心。
+- **能改自己**：Agent 可以对仓库提交改动提案（diff + 验收命令），人审后应用，验收不过自动回滚。
+- **中断可续**：进程死了不重放已执行的副作用，事件带序号，可以从断点继续或分叉。
 
-| 面 | 能力 |
+## 能用的
+
+| 模块 | 说明 |
 |---|---|
-| 运行时 | `ar` CLI 20+ 子命令、JSON 信封 + 稳定错误码与退出码；daemon 扫描并拉起 worker；run/节点目录即真相（`spec/result/events/usage/worker`） |
-| 启动 | 桌面「AICA 工作台」快捷方式，GUI 子系统无控制台；单实例；托盘（显示/新建任务/退出）；`Ctrl+Alt+A` 全局热键；关闭即收起 |
-| 工作台 | 三栏；工具时间线（人形摘要 + 展开原文 + 退出码/耗时）；结论优先；diff 呈现；计划条；审批卡（500ms 防误批）；投递三态（queue / interrupt / steer 不支持）；Git 页签；通知与未读；命令面板 `Ctrl+K`；设置 `Ctrl+,` |
-| 权限 | 三档模式（只读 / 可编辑 / 全权限）；gate 闭集 `allowed-once/rejected/cancelled/unavailable`；deny/restricted/grant 分离；危险路径硬拒；审批 TTL |
-| 上下文 | AGENTS.md/CLAUDE.md 注入；`@file` 引用；压缩事件与用量账本；`learned.md`；斜杠命令（`ar cmd list`） |
-| 编辑 | `apply_patch` 多文件 unified diff（上下文不匹配整次失败、read-before-edit） |
-| 扩展 | MCP（HTTP JSON-RPC + stdio，fail-closed 白名单）；spawn 子代理与并发；5 个 skills；`ev_propose` → `ar propose apply`（临时树验真 + 字节级回滚 + stale 保护） |
-| 质量 | 268 条测试（`node --test workbench/test`，264 pass / 4 skip）；e2e 夹具 + 故障注入；500 run warm p50 ≈ 40ms |
+| 运行时 `src/` | `ar` CLI（20+ 子命令，JSON 信封 + 稳定错误码）、daemon 拉起 worker、run/节点目录即真相 |
+| 客户端 `workbench/shell` | 桌面快捷方式启动、无控制台、单实例、托盘、`Ctrl+Alt+A` 全局热键、窗口位置记忆、文件拖放 |
+| 工作台 `workbench/` | 三栏界面；工具时间线；结论优先；diff；计划条；审批卡；投递（排队/打断）；Git 页签；通知未读；命令面板；设置 |
+| 权限 | 只读/可编辑/全权限三档；审批决策闭集；deny/restricted/grant 分离；危险路径硬拒 |
+| 上下文 | AGENTS.md 注入、`@file` 引用、用量账本与压缩事件、`learned.md`、斜杠命令 |
+| 编辑 | `apply_patch` 多文件补丁（上下文不匹配整次失败；未读文件先拒） |
+| 扩展 | MCP（HTTP 与 stdio，白名单外不可调用）、子代理 spawn 与并发、5 个 skills、提案流水线 |
+| 测试 | `node --test workbench/test`：268 条，264 通过 / 4 跳过；含 e2e 夹具与故障注入 |
 
-## 已知未完成（这就是"半成品"的部分）
+## 没做完的
 
-- **steer 没有实现**：真插话要 Pi 的 RPC，现在是 `UNSUPPORTED`，UI 里置灰并说明。
-- **MCP 只有基础能力**：HTTP/stdio 注册与调用、超时降级可用；没有工具变更通知、没有重连。
-- **自进化的"自动应用"很保守**：只对 `risk=low` 且开关打开时才自动，没有评分模型判断"改得好不好"。
-- **UI 只完成 P0/P1 的体验修正**，设计 token 已落地（`tokens.css`）但 `index.html` 还没换装；
-  字号/间距/焦点态仍是旧值，P2 的四条（设置遮住决策队列、标度、骨架屏、焦点可见）没做。
-- **子代理体系**：`spawn` 与并发上限可用，但"子代理产出如何回灌父节点上下文"只做了最简版。
-- **测试有 4 条显式 skip**（无浏览器环境的 UI 断言、部分夹具无 stdout 等），原因都写在测试里。
-- **没有 LICENSE**；仓库暂时"源码公开、权利保留"。要真正开源请先加 LICENSE。
+- **steer 未实现**：真插话需要 Pi 的 RPC，现在返回 `UNSUPPORTED`，界面里置灰说明。
+- **MCP 只有基础功能**：注册、调用、超时降级可用；没有工具变更通知与重连。
+- **提案自动应用很保守**：只对低风险提案自动应用，没有质量评分。
+- **界面只做到 P0/P1 修正**：设计 token 已有（`tokens.css`），`index.html` 尚未换装；骨架屏、焦点态、字号标度仍是旧值。
+- **子代理回灌**：spawn 与并发可用，子节点产出回传父节点上下文只做了最简版。
+- **4 条测试跳过**（无浏览器环境、部分夹具缺 stdout），原因写在测试里。
+- **没有 LICENSE**：源码公开，权利保留。
 
-## 快速开始
+## 运行
 
-需要 Node ≥ 22.19（直接跑 `.ts`，不需要构建）。
+需要 Node ≥ 22.19（直接执行 `.ts`，无需构建）。
 
 ```bash
-# 1) 拉起宿主（用户会话内，不是系统服务）
-node src/cli.ts daemon
+node src/cli.ts daemon            # 宿主循环（用户会话内，不是系统服务）
+node workbench/server.ts          # 工作台桥，默认 http://127.0.0.1:4399
+```
 
-# 2) 起工作台桥 + 页面（也可直接用桌面快捷方式）
-node workbench/server.ts          # 默认 http://127.0.0.1:4399
+构建 Windows 客户端：
 
-# 3) 构建 Windows 客户端（可选）
+```bash
 cd workbench/shell
 go build -ldflags "-H windowsgui -s -w" -o "dist/windows-amd64/AICA 工作台.exe" .
 ```
 
-状态目录：`%LOCALAPPDATA%\aica\state`（`AICA_STATE` 可覆盖）；日志在同目录 `workbench-shell.log` / `workbench-server.log`。
+状态目录 `%LOCALAPPDATA%\aica\state`（可用 `AICA_STATE` 覆盖），日志在同目录。
 
-派一条任务（真机链路）：
+派一条任务：
 
 ```bash
 curl -X POST http://127.0.0.1:4399/api/tasks -H "content-type: application/json" \
@@ -72,21 +66,20 @@ curl -X POST http://127.0.0.1:4399/api/tasks -H "content-type: application/json"
 ## 目录
 
 ```
-src/            ar 运行时（cli / daemon / runs / 信封 / 审批相关 / patch / mcp / proposals）
+src/            ar 运行时：cli、daemon、runs、信封、审批、patch、mcp、proposals
 aica-pi/        Pi 扩展包：extensions（工具与 gate）、skills、hooks、prompts
-workbench/      工作台：server.ts（桥）、view.ts（投影）、public/v1（UI）、shell（Windows 客户端）
-docs/           PRD v3、研究稿、UI 规范、审计
-workbench/test/ 单测 + e2e 夹具与故障注入
+workbench/      工作台：server.ts（桥）、view.ts（投影）、public/v1（页面）、shell（Windows 客户端）
+docs/           PRD、研究稿、UI 规范、可用度审计
+workbench/test/ 单元测试与 e2e 夹具
 ```
 
-## 依据
+## 文档
 
-- 设计文档：`docs/prd-workbench-v3.md`（能力基线、质量属性、机制吸收表、UI P1–P20）
-- 七家 Agent 的源码级研究：`docs/research/`（DeepSeekHarness / Claude Code / Codex / T3 Code / OpenCode / Oh My Pi / Misaka-Agent / Cindy）
+- 设计：`docs/prd-workbench-v3.md`
+- 七家 Agent 源码调研：`docs/research/`
 - 可用度审计：`docs/ux-audit-r5.md`
 
-## 安全
+## 注意
 
-这个程序会执行 shell 命令、读写文件、调用外部模型。默认档是"可编辑 + 监督审批"，
-危险路径有硬拒；但**它仍是半成品，别拿它跑你赔不起的东西**。所有破坏性动作都应经审批卡，
-如果你发现某条路能绕过审批，那是 bug，请提 issue。
+程序会执行 shell 命令、读写文件、调用外部模型。默认档为监督审批，危险路径有硬拒；
+但这是半成品，没有做安全加固，不建议直接用在重要环境。发现可以绕过审批的路径，请提 issue。
