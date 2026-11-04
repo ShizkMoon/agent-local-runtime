@@ -69,3 +69,7 @@ $lnk.Save()
 ```
 
 `go tool mygo dev` 亦可：改 .go 自动重建重启。
+
+> 只跑一个构建：MyGo 打包版按 `mygo.json` 的 `identifier` 加锁、`go build` 的裸二进制
+> 只按应用名加锁，两者算不同实例；同时开会抢同一个 WebView2 用户数据目录，第二个窗口
+> 会以 `HRESULT 0x8007139f` 失败。日常用 `dist/windows-amd64/` 里的那个。

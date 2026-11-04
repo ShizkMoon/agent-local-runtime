@@ -1,5 +1,7 @@
 @echo off
-rem aica workbench v0 启动器：node 桥接服务 + Edge --app 无框窗口
+rem 旧启动器（v0）：node 桥 + Edge --app 无框窗口。
+rem 已被 workbench/shell（MyGo 单二进制窗口壳）取代；仅在壳不可用时留作兜底。
+rem 注意：它会开一个最小化的控制台窗口，日常请用桌面「AICA 工作台」快捷方式。
 setlocal
 set "NODE=C:\Program Files\nodejs\node.exe"
 set "SERVER=%~dp0server.ts"
