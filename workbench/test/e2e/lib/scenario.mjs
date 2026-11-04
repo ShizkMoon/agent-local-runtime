@@ -3,8 +3,9 @@
 //
 // 用法：AICA_STATE=<dir> node lib/scenario.mjs <name>
 // 输出：最后一行 `__RESULT__{...}`，父测试解析它做断言。
-import { spawn } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { spawn, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import * as F from "./faults.mjs";
 
@@ -186,6 +187,190 @@ const scenarios = {
     const after = readFileSync(file, "utf8");
     F.diskWritable(file);
     return { ro, unwritable, threw, code, unchanged: before === after, bytes: Buffer.byteLength(after, "utf8") };
+  },
+
+  /** R6 apply_patch：多文件 all-or-nothing、真事件、失败零写入（sha256 前后一致） */
+  async "apply-patch"() {
+    const rootId = seedRun({ subject: "apply_patch 多文件" });
+    const dir = R.nodeDir(rootId, "root");           // 生产里 worker 的 cwd 就是节点目录
+    mkdirSync(join(dir, "src"), { recursive: true });
+    writeFileSync(join(dir, "src/a.txt"), "one\ntwo\nthree\n", "utf8");
+    writeFileSync(join(dir, "src/c.txt"), "keep\n", "utf8");
+    const sha = (rel) => createHash("sha256").update(readFileSync(join(dir, rel))).digest("hex");
+    const prev = process.cwd();
+    process.chdir(dir);
+    try {
+      const T = await import("../../../../aica-pi/extensions/tools.ts");
+      const pi = { tools: new Map(), registerTool(t) { this.tools.set(t.name, t); } };
+      T.default(pi);
+      const apply = async (patch) => {
+        const r = await pi.tools.get("apply_patch").execute("call-1", { patch });
+        return { isError: !!r.isError, text: String(r.content?.[0]?.text ?? "") };
+      };
+
+      // 0) 没记过账 → read-before-edit 拦住（零写入）
+      const noRead = await apply("--- a/src/c.txt\n+++ b/src/c.txt\n@@ -1 +1 @@\n-keep\n+changed\n");
+      const cSha0 = sha("src/c.txt");
+
+      // 1) 按产品自己的账本格式记账，然后"一改一新建"
+      writeFileSync(join(dir, ".aica-read.json"), JSON.stringify({ files: ["src/a.txt"] }) + "\n", "utf8");
+      const okPatch = [
+        "--- a/src/a.txt", "+++ b/src/a.txt", "@@ -1,3 +1,4 @@", " one", " two", "+two-and-half", " three",
+        "--- /dev/null", "+++ b/src/b.txt", "@@ -0,0 +1,2 @@", "+hello", "+world", "",
+      ].join("\n");
+      const okRes = await apply(okPatch);
+      const filesAfterOk = {
+        a: readFileSync(join(dir, "src/a.txt"), "utf8"),
+        b: readFileSync(join(dir, "src/b.txt"), "utf8"),
+        c: readFileSync(join(dir, "src/c.txt"), "utf8"),
+      };
+      const el = V.readEvents(join(dir, "events.jsonl"));
+      const evs = el.map((x) => x.ev);
+      const patchEv = evs.filter((e) => e.kind === "patch").map((e) => e.data);
+      const editEv = evs.filter((e) => e.kind === "file_edit").map((e) => e.data);
+      const diffs = V.diffsOf(el);
+
+      // 2) 上下文不匹配（第一个文件就错）+ 第二个文件本来可改 → 整次失败，两个文件都不许动
+      //    先把 c.txt 也记进账本，否则失败原因会是 NEEDS_READ 而不是 CONTEXT
+      writeFileSync(join(dir, ".aica-read.json"), JSON.stringify({ files: ["src/a.txt", "src/c.txt"] }) + "\n", "utf8");
+      const shaBeforeBad = { a: sha("src/a.txt"), c: sha("src/c.txt") };
+      const badPatch = [
+        "--- a/src/a.txt", "+++ b/src/a.txt", "@@ -1,2 +1,2 @@", " NOPE", " two",
+        "--- a/src/c.txt", "+++ b/src/c.txt", "@@ -1 +1 @@", "-keep", "+clobbered", "",
+      ].join("\n");
+      const badRes = await apply(badPatch);
+      const shaAfterBad = { a: sha("src/a.txt"), c: sha("src/c.txt") };
+      const el2 = V.readEvents(join(dir, "events.jsonl"));
+
+      return {
+        noRead, cSha0,
+        okRes,
+        filesAfterOk,
+        patchEv,
+        editEv,
+        diffs: diffs.map((d) => ({ file: d.file, add: d.add, del: d.del, hunks: d.hunks, hasPatch: !!d.patch })),
+        badRes,
+        shaBeforeBad,
+        shaAfterBad,
+        patchEvCount: el2.filter((x) => x.ev?.kind === "patch").length,
+        fileEditCount: el2.filter((x) => x.ev?.kind === "file_edit").length,
+      };
+    } finally {
+      process.chdir(prev);
+    }
+  },
+
+  /** R6 MCP stdio：注册表 transport=stdio、未声明 NOT_DECLARED、超时降级不阻塞 */
+  async "mcp-stdio"() {
+    const M = await import("../../../../src/mcp.ts");
+    mkdirSync(join(STATE, "runs"), { recursive: true });   // mcp_unavailable 会追加进 <STATE>/runs/index.jsonl
+    const fake = join(STATE, "fake-mcp.mjs");
+    writeFileSync(fake, [
+      'let buf = "";',
+      'const send = (o) => process.stdout.write(JSON.stringify(o) + "\\n");',
+      'process.stdin.setEncoding("utf8");',
+      'process.stdin.on("data", (c) => {',
+      '  buf += c;',
+      '  let i;',
+      '  while ((i = buf.indexOf("\\n")) >= 0) {',
+      '    const line = buf.slice(0, i); buf = buf.slice(i + 1);',
+      '    if (!line.trim()) continue;',
+      '    let msg; try { msg = JSON.parse(line); } catch { continue; }',
+      '    const env = process.env.MCP_TEST_ENV ?? "none";',
+      '    if (msg.method === "tools/list") send({ jsonrpc: "2.0", id: msg.id, result: { tools: [{ name: "echo" }] } });',
+      '    else if (msg.method === "tools/call") send({ jsonrpc: "2.0", id: msg.id, result: { content: [{ type: "text", text: "echo:" + msg.params.name + ":env=" + env }] } });',
+      '  }',
+      '});',
+      'setInterval(() => {}, 1000);',
+      "",
+    ].join("\n"), "utf8");
+    const hang = join(STATE, "hang-mcp.mjs");
+    writeFileSync(hang, "process.stdin.resume(); setInterval(() => {}, 1000);\n", "utf8");
+
+    const t0 = Date.now();
+    const reg = await M.initMcp([
+      { name: "local", command: NODE, args: [fake], env: { MCP_TEST_ENV: "sekret-token" } },
+      { name: "hang", command: NODE, args: [hang] },
+    ]);
+    const elapsed = Date.now() - t0;
+
+    const rawReg = readFileSync(join(STATE, "mcp.json"), "utf8");
+    const regFile = JSON.parse(rawReg);
+    const jsonl = join(STATE, "runs", "index.jsonl");
+    const indexEvents = existsSync(jsonl)
+      ? readFileSync(jsonl, "utf8").split("\n").filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean)
+      : [];
+    const unavail = indexEvents.filter((e) => e.event === "mcp_unavailable");
+
+    const local = reg.servers.find((s) => s.name === "local");
+    const callEcho = await M.callMcp(local, "echo", { q: 1 });
+
+    // worker 侧：真 mcp_call 工具（未声明 / 已声明）
+    const rootId = seedRun({ subject: "mcp 白名单" });
+    const dir = R.nodeDir(rootId, "root");
+    const prev = process.cwd();
+    process.chdir(dir);
+    try {
+      const T = await import("../../../../aica-pi/extensions/tools.ts");
+      const pi = { tools: new Map(), registerTool(t) { this.tools.set(t.name, t); } };
+      T.default(pi);
+      const callTool = async (tool) => {
+        const r = await pi.tools.get("mcp_call").execute("call-1", { tool, args: { q: 1 } });
+        return { isError: !!r.isError, text: String(r.content?.[0]?.text ?? "") };
+      };
+      const undeclared = await callTool("mcp_local_echo");
+      const ghost = await callTool("mcp_local_ghost");
+      writeFileSync(join(dir, "spec.json"), JSON.stringify({
+        id: `node:${rootId}/root`, type: "assign", agent: "pi", goal: "mcp", accept: ["x"],
+        inputs: [], tools: ["mcp_local_echo"], budget: { depth_left: 1 },
+      }, null, 2) + "\n", "utf8");
+      const declared = await callTool("mcp_local_echo");
+      return {
+        elapsed,
+        registry: regFile.servers.map((s) => ({ name: s.name, ok: s.ok, transport: s.transport, tools: (s.tools ?? []).map((t) => t.name), url: s.url ?? null, command: s.command ? "set" : null, error: s.error ? String(s.error).slice(0, 80) : null })),
+        envLeaked: /sekret-token/.test(rawReg),
+        unavail: unavail.map((e) => ({ server: e.server, transport: e.transport, error: String(e.error ?? "").slice(0, 60) })),
+        resolve: { hit: !!M.resolveMcpTool("mcp_local_echo"), miss: M.resolveMcpTool("mcp_local_nope") },
+        callEcho: String(callEcho?.content?.[0]?.text ?? callEcho?.text ?? ""),
+        undeclared, ghost, declared,
+      };
+    } finally {
+      process.chdir(prev);
+    }
+  },
+
+  /** G-2 严格态：非法迁移 → ILLEGAL_TRANSITION + state_reject，result.json 保持原状（进程内 + CLI 两条入口） */
+  async "illegal-transition"() {
+    const rootId = seedRun({ subject: "非法迁移" });
+    const dir = R.nodeDir(rootId, "root");
+    const done = R.transitResult(rootId, "root", { status: "done", summary: "第一次收尾" }, { source: "e2e" });
+    const before = readFileSync(join(dir, "result.json"), "utf8");
+    const bad = R.transitResult(rootId, "root", { status: "failed", summary: "想覆写" }, { source: "e2e" });
+    const after = readFileSync(join(dir, "result.json"), "utf8");
+    const resolved = R.resolveWaiting(rootId, "root");
+    const rejects = R.readEvents(rootId, "root")
+      .filter((e) => e.kind === "state_reject")
+      .map((e) => e.data);
+    // 同状态重放是幂等的（done→done 合法）；真正非法的是 done→failed，所以 CLI 用 fail
+    const cli = spawnSync(NODE, [CLI, "fail", "--summary", "想在 done 上标失败"], {
+      env: { ...process.env, AICA_STATE: STATE, AR_ROOT_ID: rootId, AR_NODE_PATH: "root" },
+      encoding: "utf8",
+      timeout: 30000,
+      windowsHide: true,
+    });
+    const lines = String(cli.stdout ?? "").trim().split("\n").filter(Boolean);
+    let env = null;
+    try { env = JSON.parse(lines[lines.length - 1]); } catch { /* 非 JSON 由断言兜底 */ }
+    return {
+      done: { ok: done.ok, status: done.result?.status, summary: done.result?.summary },
+      bad: { ok: bad.ok, code: bad.code ?? null, from: bad.from ?? null, to: bad.to ?? null },
+      unchanged: before === after,
+      finalStatus: JSON.parse(after).status,
+      finalSummary: JSON.parse(after).summary,
+      resolved,
+      rejects,
+      cli: { exit: cli.status, ok: env?.ok ?? null, errCode: env?.error?.code ?? null, msg: String(env?.error?.message ?? "").slice(0, 80) },
+    };
   },
 
   /** 安全面（G-4）：全部走 gate.ts 的真实解析器，不起模型、不弹窗 */

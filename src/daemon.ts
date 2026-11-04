@@ -4,7 +4,7 @@ import { spawn, execFileSync } from "node:child_process";
 import { appendFileSync, existsSync, readFileSync, mkdirSync, copyFileSync, writeFileSync, unlinkSync, statSync } from "node:fs";
 import { join, dirname, isAbsolute, resolve, relative } from "node:path";
 import { fileURLToPath } from "node:url";
-import { pendingNodes, appendEvent, readResult, writeResult, patchResult, writeSpec, writeWorker, clearWorker, abortWorker, nodeDir, RUNS_DIR, STATE, DEFAULT_PARALLEL, writeCheckpoint, readCheckpoint, lastSeq, closeDanglingTools } from "./runs.ts";
+import { pendingNodes, appendEvent, readResult, writeResult, patchResult, writeSpec, writeWorker, clearWorker, abortWorker, nodeDir, RUNS_DIR, STATE, DEFAULT_PARALLEL, writeCheckpoint, readCheckpoint, lastSeq, closeDanglingTools, learnedPath, readEvents } from "./runs.ts";
 import { tapStdout, readUsage, usageTokens, type UsageLedger, type UsageTurn } from "./transcribe.ts";
 import type { SpecEnvelope } from "./envelope.ts";
 import { isProfile } from "./envelope.ts";
@@ -44,7 +44,7 @@ function rolesCfg(): RolesCfg {
   catch { return {}; }
 }
 /** 模型解析序：spec.model ?? roles[profile] ?? AICA_PI_MODEL ?? 内置默认 */
-function modelFor(spec: SpecEnvelope): string {
+export function modelFor(spec: SpecEnvelope): string {
   // R3：plan 档没有专属 roles 条目，沿用 worker 的模型选择（只换工具面与 prompt）
   const role = (spec.profile === "plan" ? "worker" : spec.profile ?? "worker") as keyof RolesCfg;
   const roles = rolesCfg();
@@ -91,7 +91,7 @@ export function toolAllowlist(spec: SpecEnvelope): string[] {
 }
 
 // S12 learn 注入上限：userMessage 尾段只带 learned.md 前 2000 字（防前缀膨胀）
-const LEARNED_INJECT_CAP = 2000;
+const LEARNED_INJECT_CAP = 2048;   // 字节（R6 起按 UTF-8 字节计，中文不再被字符数坑）
 
 // R3 B3：@file 引用 —— 单文件 ≤8KB、总量 ≤32KB；缺失注入 [缺失] 标记并交给调用方记 input 事件（不阻塞拉起）
 export const AT_REF_FILE_CAP = 8 * 1024;
@@ -199,6 +199,136 @@ export function expandAtRefs(
   return { text: ["## 引用文件", ...blocks].join("\n\n"), refs };
 }
 
+// ---------------------------------------------------------------- R6：上下文压缩
+// 触发：daemon 在 turn 边界用 usage 累计判断（默认窗口的 80%，spec.budget.context_tokens 覆盖窗口）。
+// 产物：compaction_start / compaction_summary / compaction_end 三事件 + <node>/compaction.json，
+//       下一轮 userMessage 注入 `## 上下文压缩`（≤2KB）；最近 3 轮原文保留在 session 里，只摘要更早的轮次。
+
+/** 默认上下文窗口（tokens）；env AICA_CONTEXT_WINDOW 可改默认值 */
+export const CONTEXT_WINDOW_DEFAULT = Number(process.env.AICA_CONTEXT_WINDOW ?? 128_000) || 128_000;
+export const COMPACT_RATIO = 0.8;
+export const COMPACT_KEEP_TURNS = 3;
+/** 摘要注入上限（字节） */
+export const COMPACT_SUMMARY_CAP = 2048;
+
+export interface CompactionRecord {
+  at: string;
+  window: number;
+  threshold: number;
+  before_tokens: number;
+  /** 压缩后 tokens 未知就 null（不拿摘要字节数冒充 tokens） */
+  after_tokens: number | null;
+  /** 被摘要的轮次（更早的那些） */
+  turns: number[];
+  /** 保留原文的最近轮次 */
+  kept: number[];
+  summary: string;
+}
+
+export function compactionWindow(spec: SpecEnvelope): number {
+  const c = Number((spec?.budget as { context_tokens?: number } | undefined)?.context_tokens);
+  return Number.isFinite(c) && c > 0 ? Math.floor(c) : CONTEXT_WINDOW_DEFAULT;
+}
+
+export function compactionThreshold(window: number): number {
+  return Math.floor(window * COMPACT_RATIO);
+}
+
+/** 按 turn 事件切分轮次；更早轮次的 assistant 文本压成摘要，最近 keepLast 轮留原文 */
+export function buildCompactionSummary(
+  events: { kind: string; data?: any }[],
+  keepLast = COMPACT_KEEP_TURNS,
+): { summary: string; turns: number[]; kept: number[] } {
+  const perTurn = new Map<number, string[]>();
+  let cur = 0;
+  for (const e of events) {
+    if (e?.kind === "turn") {
+      const i = Number(e.data?.i);
+      cur = Number.isFinite(i) && i > 0 ? i : cur + 1;
+      continue;
+    }
+    if (e?.kind === "agent_message" && e.data?.role === "assistant" && typeof e.data?.text === "string" && e.data.text.trim()) {
+      const arr = perTurn.get(cur) ?? [];
+      arr.push(e.data.text.trim());
+      perTurn.set(cur, arr);
+    }
+  }
+  const idx = [...perTurn.keys()].sort((a, b) => a - b);
+  const kept = idx.slice(-keepLast);
+  const older = idx.slice(0, Math.max(0, idx.length - keepLast));
+  const lines = older.map((i) => `- 第 ${i} 轮：${perTurn.get(i)!.join(" ").replace(/\s+/g, " ").slice(0, 160)}`);
+  let summary = lines.join("\n");
+  if (Buffer.byteLength(summary, "utf8") > COMPACT_SUMMARY_CAP) {
+    summary = Buffer.from(summary, "utf8").subarray(0, COMPACT_SUMMARY_CAP).toString("utf8");
+  }
+  return { summary: summary || "（更早的轮次没有可摘要的文本）", turns: older, kept };
+}
+
+export interface CompactionDeps {
+  /** usage 累计（daemon 传 usageTokens(ledger)） */
+  used: number;
+  events: () => { kind: string; data?: any }[];
+  append: (rec: { kind: string; data: Record<string, unknown> }) => void;
+  write: (rec: CompactionRecord) => void;
+}
+
+/** @returns "skipped" 本进程已压过 / "below" 未到阈值 / "compacted" 三事件已写 */
+export function maybeCompact(spec: SpecEnvelope, deps: CompactionDeps, already = false): "skipped" | "below" | "compacted" {
+  if (already) return "skipped";
+  const window = compactionWindow(spec);
+  const threshold = compactionThreshold(window);
+  if (!(deps.used >= threshold)) return "below";
+  const { summary, turns, kept } = buildCompactionSummary(deps.events());
+  const rec: CompactionRecord = {
+    at: new Date().toISOString(),
+    window,
+    threshold,
+    before_tokens: deps.used,
+    after_tokens: null,
+    turns,
+    kept,
+    summary,
+  };
+  deps.append({ kind: "compaction_start", data: { before_tokens: deps.used, threshold, window } });
+  deps.append({ kind: "compaction_summary", data: { turns, kept, bytes: Buffer.byteLength(summary, "utf8"), summary } });
+  deps.append({ kind: "compaction_end", data: { before_tokens: deps.used, after_tokens: null, kept } });
+  deps.write(rec);
+  return "compacted";
+}
+
+/** 读节点 compaction.json（下一轮 userMessage 注入用） */
+export function readCompaction(dir: string): CompactionRecord | null {
+  try {
+    const rec = JSON.parse(readFileSync(join(dir, "compaction.json"), "utf8"));
+    return rec && typeof rec.summary === "string" ? (rec as CompactionRecord) : null;
+  } catch { return null; }
+}
+
+// R6：按 UTF-8 字节截断，且不切出半个多字节字符（cap 是字节上限）
+export function truncBytes(s: string, cap: number): string {
+  const buf = Buffer.from(s, "utf8");
+  if (buf.length <= cap) return s;
+  let cut = Math.max(0, cap);
+  while (cut > 0 && (buf[cut] & 0xc0) === 0x80) cut--;   // 回退到字符边界
+  return buf.subarray(0, cut).toString("utf8");
+}
+
+// R6：learned.md 按 mtime 缓存（文件没变不重读），按字节截 ≤2KB
+let learnedCache: { sig: number; text: string } | null = null;
+
+export function learnedText(): string {
+  try {
+    const f = learnedPath();
+    const sig = statSync(f).mtimeMs;
+    if (learnedCache && learnedCache.sig === sig) return learnedCache.text;
+    const text = truncBytes(readFileSync(f, "utf8"), LEARNED_INJECT_CAP).trim();
+    learnedCache = { sig, text };
+    return text;
+  } catch {
+    return "";
+  }
+}
+
 // R5：AGENTS.md 项目上下文（≤8KB）——项目根到 cwd 逐级找 AGENTS.md（优先）/CLAUDE.md
 export const AGENTS_MD_CAP = 8 * 1024;
 export interface AgentsMdInfo { files: string[]; bytes: number; text: string }
@@ -294,11 +424,14 @@ export function userMessage(
     for (const r of spec.reply) lines.push(`- [${r.ts}] ${r.text}`);
     if (resumed) lines.push("- [恢复] 此前你已提问，人工回复见上");
   }
-  // S12 经验教训：ev_learn 沉淀的全局 learned.md，末段注入前 2000 字（新→旧，worker 当参考不当指令）
-  try {
-    const learned = readFileSync(join(STATE, "memory", "learned.md"), "utf8").slice(0, LEARNED_INJECT_CAP).trim();
-    if (learned) lines.push("", "## 经验教训", learned);
-  } catch { /* 没有 learned.md 属常态 */ }
+  // S12/R6 经验教训：ev_learn 沉淀的全局 learned.md，末段注入 ≤2KB（新→旧，worker 当参考不当指令）
+  const learned = learnedText();
+  if (learned) lines.push("", "## 经验教训", learned);
+  // R6：上一轮触发的压缩摘要（≤2KB；最近 3 轮原文仍保留在会话里）
+  const comp = readCompaction(baseDir);
+  if (comp?.summary) {
+    lines.push("", "## 上下文压缩", comp.summary, `（更早轮次已压缩；最近 ${COMPACT_KEEP_TURNS} 轮原文仍在会话里，别重复问）`);
+  }
   // S21：续跑 —— 进程中断/daemon 重启/人工回复后重新拉起，末尾明确要求接着做，别重来一遍
   if (resumed) {
     let where = "";
@@ -579,6 +712,7 @@ function spawnWorker(rootId: string, path: string, spec: SpecEnvelope, resumed =
     // S20 tokens 预算：turn 边界（usage.json 刚落账）判定，超限 → budget 事件 + abort（result.summary/reason 记 budget exceeded）
     // S21 checkpoint：同一个 turn 边界写 checkpoint.json{last_turn,last_event_seq,at}，续跑时知道停在哪
     let budgetHit = false;
+    let compacted = false;
     const onTurn = (ledger: UsageLedger, turn: UsageTurn): void => {
       try { writeCheckpoint(rootId, path, { last_turn: turn.i, last_event_seq: lastSeq(rootId, path), at: new Date().toISOString() }); }
       catch { /* checkpoint 写不进去不阻断 */ }
@@ -589,6 +723,21 @@ function spawnWorker(rootId: string, path: string, spec: SpecEnvelope, resumed =
         patch: (p) => { patchResult(rootId, path, p); },
       });
       if (res === "exceeded") indexLog({ event: "budget_exceeded", root_id: rootId, node: spec.id, spent: usageTokens(ledger), limit: spec.budget?.tokens });
+      // R6：上下文压缩 —— 同一 turn 边界按 usage 累计判阈值，三事件 + compaction.json（下一轮注入摘要）
+      if (budgetHit || compacted) return;
+      const cr = maybeCompact(spec, {
+        used: usageTokens(ledger),
+        events: () => readEvents(rootId, path),
+        append: (rec) => appendEvent(rootId, path, rec),
+        write: (rec) => {
+          try { writeFileSync(join(dir, "compaction.json"), JSON.stringify(rec, null, 2) + "\n", "utf8"); }
+          catch { /* 写不进 compaction.json 不阻断（事件已留证据） */ }
+        },
+      });
+      if (cr === "compacted") {
+        compacted = true;
+        indexLog({ event: "compaction", root_id: rootId, node: spec.id, used: usageTokens(ledger) });
+      }
     };
     tapStdout(child, dir, rootId, path, { onTurn });   // stdout → stdout.log 全量 + events.jsonl 增量转写
     // worker.json 租约锁：pendingNodes 见 live 锁即跳过（防 daemon 崩溃重启后重复拉起同一会话）

@@ -1,0 +1,218 @@
+/* ============================================================================
+   aica 工作台 · 设计令牌（R6）
+   ----------------------------------------------------------------------------
+   这份文件是"唯一的样式来源"：下一轮 index.html 换装时，所有硬编码的
+   字号 / 间距 / 颜色 / 圆角 / 阴影 / 动效都应该改成这里的 var(...)。
+   纪律：
+     1. 字号只有 6 档（--fs-1..6），不再出现 11.5 / 12.5 / 13.5 这类半像素档；
+     2. 间距只有 7 档（--sp-1..7），全部 4 的倍数；需要 1-2px 的"光学微调"用
+        transform / outline-offset，不用 padding/margin；
+     3. 颜色两套（:root 走亮色，[data-theme="dark"] 覆盖），语义名不再带色相
+        （不叫 --warn-soft 之类，叫 --bg/--text/--line/--accent/--danger/--warn/--ok）；
+     4. 状态色只用于"状态"：--danger 终结失败 / --warn 待裁决、预算 / --ok 通过；
+        --brand（clay）只做 agent presence（状态点、头像、发送键），不做文字色。
+   断言：`node --test workbench/test/tokens.test.ts`
+   ============================================================================ */
+
+/* ---------------------------------------------------------------- 字体族 */
+:root,
+[data-theme="light"] {
+  color-scheme: light;
+
+  --f-sans: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+  --f-serif: "Newsreader", Georgia, "Songti SC", "Noto Serif CJK SC", ui-serif, serif;
+  --f-mono: "JetBrains Mono", ui-monospace, "Cascadia Code", "SF Mono", Menlo, Consolas,
+    "Microsoft YaHei", monospace;
+
+  /* -------------------------------------------------------------- 字号阶
+     6 档，梯度约 1.08 / 1.08 / 1.14 / 1.25 / 1.4：
+       12 元信息（时间、计数、快捷键提示）
+       13 标签（节标题、分组长、徽标）
+       14 正文（说明、卡片描述）—— 全站默认
+       16 强调（对话正文、卡片标题）
+       20 标题（中栏标题、弹层标题）
+       28 空态主句（"还没有任务"那一级） */
+  --fs-1: 12px;
+  --fs-2: 13px;
+  --fs-3: 14px;
+  --fs-4: 16px;
+  --fs-5: 20px;
+  --fs-6: 28px;
+
+  --lh-1: 1.45;
+  --lh-2: 1.55;
+  --lh-3: 1.35;
+
+  /* -------------------------------------------------------------- 间距阶
+     7 档，全部 4 的倍数。用法约定：
+       4  图标与文字之间 / 行内微间距
+       8  同一块内元素之间
+       12 块内分节（卡片头与正文）
+       16 块与块之间（默认纵向节奏）
+       20 大块之间（结论块与验收条）
+       24 面板内边距
+       32 面板与画布之间 / 空态留白 */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 20px;
+  --sp-6: 24px;
+  --sp-7: 32px;
+
+  /* -------------------------------------------------------------- 颜色 */
+  --bg: #fcfcfb;              /* 画布 */
+  --bg-1: #f9f9f7;            /* 沉降面：左栏 rail、代码底 */
+  --bg-2: #ffffff;            /* 抬升面：卡片、气泡、composer */
+  --line: rgba(0, 0, 0, 0.08);
+  --line-strong: rgba(0, 0, 0, 0.16);
+
+  --text: #0b0b0b;            /* 19.2:1 on --bg */
+  --text-2: #52514e;          /*  7.7:1 */
+  --text-3: #67655d;          /*  5.7:1 —— 弱化文字的最低档，不许再淡 */
+
+  --accent: #184f95;          /*  7.9:1  可点的东西 / 链接 / 焦点环 */
+  --accent-soft: rgba(24, 79, 149, 0.09);
+  --danger: #b04a6e;          /*  5.1:1  终结失败、破坏性动作 */
+  --danger-soft: rgba(176, 74, 110, 0.1);
+  --warn: #8f5f36;            /*  5.3:1  待裁决、预算告警（旧 #b07b4f 只有 3.53:1，已换） */
+  --warn-soft: rgba(143, 95, 54, 0.12);
+  --ok: #5f7a45;              /*  4.7:1  通过 / 已完成 */
+  --ok-soft: rgba(95, 122, 69, 0.1);
+
+  --brand: #d97757;           /* clay：只做 agent presence，不做文字色（3.1:1） */
+  --on-accent: #ffffff;
+  --on-brand: #1c1a16;
+
+  --hov: rgba(0, 0, 0, 0.035);
+  --sk-hi: rgba(0, 0, 0, 0.06);
+
+  /* -------------------------------------------------------- 圆角 / 阴影 */
+  --r-1: 8px;                 /* 控件：按钮、输入、小卡 */
+  --r-2: 12px;                /* 卡片 */
+  --r-3: 16px;                /* 弹层 / composer */
+  --r-pill: 999px;            /* 胶囊（不算一档） */
+
+  --sh-1: 0 1px 2px rgba(0, 0, 0, 0.06);
+  --sh-2: 0 4px 12px rgba(0, 0, 0, 0.1);
+  --sh-3: 0 8px 24px rgba(0, 0, 0, 0.14);
+
+  /* -------------------------------------------------------------- 动效 */
+  --dur-1: 120ms;             /* 悬停、颜色、位移 */
+  --dur-2: 200ms;             /* 展开、弹层 */
+  --ease: cubic-bezier(0.165, 0.84, 0.44, 1);
+
+  /* ---------------------------------------------------------- 布局常量 */
+  --w-side: 256px;
+  --w-right: 380px;
+  --w-thread: 720px;
+  --z-netbar: 18;
+  --z-pop: 40;
+}
+
+/* --------------------------------------------------------------- 暗色 */
+[data-theme="dark"] {
+  color-scheme: dark;
+
+  --bg: #151515;
+  --bg-1: #0b0b0b;
+  --bg-2: #1a1a19;
+  --line: rgba(255, 255, 255, 0.09);
+  --line-strong: rgba(255, 255, 255, 0.18);
+
+  --text: #f0efec;            /* 15.9:1 */
+  --text-2: #c3c2b7;          /* 10.2:1 */
+  --text-3: #898781;          /*  5.1:1 */
+
+  --accent: #86b6ef;          /*  8.7:1 */
+  --accent-soft: rgba(134, 182, 239, 0.13);
+  --danger: #c46686;          /*  4.9:1 */
+  --danger-soft: rgba(196, 102, 134, 0.13);
+  --warn: #d4a27f;            /*  8.1:1 */
+  --warn-soft: rgba(212, 162, 127, 0.16);
+  --ok: #8fb573;              /*  7.9:1 */
+  --ok-soft: rgba(143, 181, 115, 0.14);
+
+  --brand: #d97757;
+  --on-accent: #0b0b0b;
+  --on-brand: #161311;
+
+  --hov: rgba(255, 255, 255, 0.045);
+  --sk-hi: rgba(255, 255, 255, 0.1);
+
+  --sh-1: 0 1px 2px rgba(0, 0, 0, 0.35);
+  --sh-2: 0 4px 12px rgba(0, 0, 0, 0.4);
+  --sh-3: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+
+/* --------------------------------------------------------------- 焦点
+   全站唯一焦点样式：键盘用户靠它定位（P15：Ctrl+K → J/K → A/R 这条主路径）。
+   鼠标点击不出现焦点环（:not(:focus-visible)），键盘导航一定出现。 */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: var(--r-1);
+}
+:focus:not(:focus-visible) {
+  outline: none;
+}
+
+/* ------------------------------------------------------------- 骨架屏
+   用法：<div class="sk sk-line"></div>（单行）/ .sk-block（块）/ .sk-circle（圆）
+   reduced-motion 下退化为静态灰块，不做位移动画。 */
+.sk {
+  display: block;
+  position: relative;
+  overflow: hidden;
+  background: var(--bg-1);
+  border-radius: var(--r-1);
+  min-height: 12px;
+}
+.sk::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, var(--sk-hi), transparent);
+  animation: sk-shimmer 1.4s var(--ease) infinite;
+}
+.sk-line {
+  height: 12px;
+}
+.sk-line + .sk-line {
+  margin-top: var(--sp-2);
+}
+.sk-block {
+  height: 64px;
+  border-radius: var(--r-2);
+}
+.sk-circle {
+  width: 24px;
+  height: 24px;
+  min-height: 0;
+  border-radius: var(--r-pill);
+}
+@keyframes sk-shimmer {
+  to {
+    transform: translateX(100%);
+  }
+}
+
+/* --------------------------------------------------------- 动效降级
+   系统开了"减少动态效果"就全关：不做位移、不做闪烁，只保留颜色变化。 */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+  .sk {
+    background: var(--bg-2);
+  }
+  .sk::after {
+    display: none;
+  }
+}

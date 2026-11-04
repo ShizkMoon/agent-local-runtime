@@ -130,7 +130,66 @@ const preloadTemplate = `(() => {
     if (location.hash.indexOf("#new") === 0) focusComposer();
   });
 
-  // ---- 4. 更新提示：底部一次性 pill ----
+  // ---- 4. Ctrl+/ 快捷键速查面板 ----
+  const SHORTCUTS = [
+    ["Ctrl+K", "命令面板"],
+    ["Ctrl+,", "设置"],
+    ["Ctrl+/", "本面板"],
+    ["J / K", "切任务"],
+    ["A", "批准"],
+    ["R", "拒绝"],
+    ["/", "聚焦输入框"],
+    ["Esc", "关闭浮层"],
+    ["Ctrl+Alt+A", "全局唤出/收起"],
+  ];
+  let shortcutsEl = null;
+  const closeShortcuts = () => {
+    if (!shortcutsEl) return;
+    try { shortcutsEl.remove(); } catch (_) {}
+    shortcutsEl = null;
+  };
+  const openShortcuts = () => {
+    if (shortcutsEl || document.getElementById("aica-shortcuts")) return;
+    const rows = SHORTCUTS.map(([key, label]) =>
+      '<div style="display:flex;align-items:center;justify-content:space-between;gap:32px;padding:5px 0;border-top:1px solid #2c2c31">' +
+        '<span style="color:#d4d4d8">' + label + '</span>' +
+        '<kbd style="font:11px/1.4 ui-monospace,Consolas,monospace;color:#fafafa;background:#3f3f46;border:1px solid #52525b;border-bottom-width:2px;border-radius:5px;padding:2px 7px;white-space:nowrap">' + key + '</kbd>' +
+      '</div>').join("");
+    const el = document.createElement("div");
+    el.id = "aica-shortcuts";
+    el.innerHTML =
+      '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">' +
+        '<strong style="font-size:14px;color:#fafafa">快捷键</strong>' +
+        '<span style="font-size:11px;color:#71717a">Esc 关闭</span>' +
+      '</div>' + rows +
+      '<div style="margin-top:10px;color:#71717a;font-size:11px">输入框聚焦时也可以按 Ctrl+/ 打开本面板</div>';
+    el.style.cssText = [
+      "position:fixed", "left:50%", "top:50%", "transform:translate(-50%,-50%)",
+      "z-index:2147483646", "width:min(420px, calc(100vw - 48px))",
+      "box-sizing:border-box", "padding:16px 18px", "border-radius:12px",
+      "background:rgba(24,24,27,.97)", "border:1px solid #3f3f46",
+      "box-shadow:0 20px 60px rgba(0,0,0,.5)",
+      "font:13px/1.5 system-ui,'Segoe UI',sans-serif",
+    ].join(";");
+    el.addEventListener("click", (e) => e.stopPropagation());
+    document.body.appendChild(el);
+    shortcutsEl = el;
+  };
+  window.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && shortcutsEl) {
+      e.preventDefault();
+      closeShortcuts();
+      return;
+    }
+    const slash = e.key === "/" || e.key === "?" || e.code === "Slash";
+    if (e.ctrlKey && !e.altKey && !e.metaKey && slash) {
+      e.preventDefault();
+      if (shortcutsEl) closeShortcuts();
+      else openShortcuts();
+    }
+  }, true);
+
+  // ---- 5. 更新提示：底部一次性 pill ----
   const showNotice = () => {
     if (!NOTICE) return;
     if (document.getElementById("aica-update-pill")) return;

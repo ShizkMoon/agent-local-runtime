@@ -28,8 +28,10 @@ export interface StepView {
   kind: StepKind;
   /** 工具名（file_edit 为 edit/write/add/delete + 路径末段） */
   name: string;
-  /** 参数摘要：单行、空白折叠、≤160 字 */
+  /** 原始参数摘要：单行、空白折叠、≤160 字（JSON 原样，只给展开里看） */
   args: string;
+  /** R5-01：人形参数摘要（单源）——bash 取命令行、read 取路径、edit 取 `文件 +N −M`、ev_* 取摘要首句 */
+  arg_text: string;
   st: StepStatus;
   /** 退出码：事件里显式给，或从输出正文里认出（bash/powershell） */
   exit: number | null;
@@ -323,6 +325,8 @@ export interface RunView {
   effort: string | null;
   /** R5：审批模式（只读 / 可编辑 / 全权限）—— 由 permission + tools 推，null = 未知 */
   mode: "readonly" | "edit" | "full" | null;
+  /** R5-05：距最近一次事件/心跳多久（ms）；null = 没有任何时间戳可依 */
+  idle_ms: number | null;
 }
 
 /** R5：审批模式判定（徽标与设置面板共用；只读靠工具面推，全权限靠 permission） */
@@ -534,6 +538,68 @@ function oneLine(v: unknown, cap: number): string {
   s = s.replace(/\s+/g, " ").trim();
   return s.length > cap ? s.slice(0, cap) + "…" : s;
 }
+/** R5-01：按词边界截断 —— 退到最近的空格/斜杠/分隔符，不留 `artifa…` 这种半截词 */
+export function wordCut(s: unknown, cap: number): string {
+  const str = String(s ?? "").replace(/\s+/g, " ").trim();
+  if (str.length <= cap) return str;
+  const head = str.slice(0, cap);
+  const m = head.match(/^(.*)[\s/\\>|]/);
+  const cut = m && m[1].length >= Math.floor(cap * 0.6) ? m[1] : head;
+  return cut.replace(/[\s/\\>|]+$/, "") + "…";
+}
+
+const SHELL_WRAP = /^\s*(?:\/usr\/bin\/env\s+)?(?:\/bin\/)?(?:bash|sh|zsh|pwsh|powershell)(?:\.exe)?\s+(?:-lc|-c)\s+/i;
+
+/** R5-01：工具参数的人形摘要（投影层单源；UI 只渲染它，原始 JSON 留在展开里） */
+export function argTextOf(kind: string, name: string, args: unknown): string {
+  const a: any = args && typeof args === "object" ? args : (typeof args === "string" ? { text: args } : {});
+  const nm = String(name || "").toLowerCase();
+  const pick = (...keys: string[]) => {
+    for (const k of keys) { const v = a?.[k]; if (v != null && v !== "") return v; }
+    return undefined;
+  };
+
+  // 1) shell：命令首行，剥掉 `bash -lc "…"` 包装
+  if (/\b(bash|powershell|pwsh|shell|sh|exec|terminal)\b/.test(nm) || (kind === "tool" && pick("command", "cmd") != null)) {
+    let cmd = String(pick("command", "cmd", "script", "text") ?? "");
+    cmd = (cmd.split("\n")[0] ?? "").replace(SHELL_WRAP, "").trim();
+    cmd = cmd.replace(/^(["'])([\s\S]*)\1$/, "$2").trim();
+    if (cmd) return wordCut(cmd, 120);
+  }
+  // 2) 读/找：路径或模式
+  if (/^(read|glob|ls|find|grep|rg|search)\b/.test(nm) || /\b(glob|grep)\b/.test(nm)) {
+    const p = pick("path", "file", "pattern", "glob", "query", "dir");
+    if (p != null) return wordCut(p, 96);
+  }
+  // 3) 编辑/补丁：文件 + 增删行数
+  if (/^(edit|write|apply_patch|patch|multiedit|str_replace)\b/.test(nm) || /patch/.test(nm)) {
+    const file = pick("path", "file", "target", "filename") ?? (Array.isArray(a?.files) ? a.files[0] : "");
+    const add = pick("add", "added", "additions", "insertions");
+    const del = pick("del", "deleted", "deletions", "removals");
+    const stat = (typeof add === "number" || typeof del === "number") ? `+${Number(add ?? 0)} −${Number(del ?? 0)}` : "";
+    const txt = [file ? String(file) : "", stat].filter(Boolean).join(" ");
+    if (txt) return wordCut(txt, 110);
+  }
+  // 4) ev_*：摘要第一句
+  if (nm.startsWith("ev_") || kind === "ev") {
+    const s = pick("summary", "text", "question", "message", "title");
+    if (s != null) return wordCut(String(s).split(/(?<=[。！？.!?])\s*/)[0], 120);
+  }
+  // 5) 其余：key=value 拼接（空值不占位）
+  const kv = Object.keys(a ?? {}).slice(0, 4)
+    .map(k => `${k}=${oneLine(a[k], 36)}`).filter(x => !x.endsWith("="));
+  if (kv.length) return wordCut(kv.join(" · "), 140);
+  if (typeof args === "string") return wordCut(args, 140);
+  return "";
+}
+
+/** R5-06：opts 第二格 kind —— 破坏性动作（删/拒绝/中止）必须比普通动作重 */
+export function optKindOf(label: unknown): "" | "danger" | "solid" {
+  const s = String(label ?? "");
+  if (/删|拒绝|中止|停止|放弃|不可恢复|清空|覆盖|强制/.test(s)) return "danger";
+  if (/^(允许|同意|批准|留着|保留|应用|采用|确认|恢复)/.test(s)) return "solid";
+  return "";
+}
 
 function textOf(v: unknown): string {
   if (v == null) return "";
@@ -576,6 +642,7 @@ interface Draft {
   kind: StepKind;
   name: string;
   args: string;
+  arg_text: string;
   ts: string;
   i: number;
   call_id: string | null;
@@ -595,7 +662,7 @@ interface Draft {
 
 function draft(i: number, ts: unknown, kind: StepKind, name: string, args: unknown, callId: string | null): Draft {
   return {
-    kind, name, args: oneLine(args, 160), ts: String(ts ?? ""), i, call_id: callId,
+    kind, name, args: oneLine(args, 160), arg_text: argTextOf(kind, name, args), ts: String(ts ?? ""), i, call_id: callId,
     raw: "", partial: "", ms: null, exit: null, isErr: false, ended: false, ends: 0,
     explicitTotal: null, cappedFlag: false,
   };
@@ -615,6 +682,7 @@ function finish(dr: Draft, lines: number, live: boolean): StepView {
     kind: dr.kind,
     name: dr.name,
     args: dr.args,
+    arg_text: dr.arg_text,
     st,
     exit: dr.exit,
     ms: dr.ms,
@@ -1338,6 +1406,68 @@ function runFingerprint(runsDir: string, rootId: string, paths: string[]): strin
   return [one(base), one(join(base, "run.json")), one(join(base, "nodes")), one(join(base, "git-ask.json")), ...nodeMs].join("|");
 }
 
+/** 读文件末尾最多 64KB，取最后一条能解析出 ts 的 JSON 行（不整文件读） */
+function tailTsMs(file: string): number | null {
+  try {
+    const st = statSync(file);
+    if (!st.isFile() || st.size === 0) return null;
+    const take = Math.min(st.size, 64 * 1024);
+    const fd = openSync(file, "r");
+    try {
+      const buf = Buffer.alloc(take);
+      readSync(fd, buf, 0, take, st.size - take);
+      const lines = buf.toString("utf8").split("\n");
+      for (let i = lines.length - 1; i >= 0; i--) {
+        const l = lines[i].trim();
+        if (!l) continue;
+        try {
+          const o = JSON.parse(l);
+          const t = Date.parse(String(o?.ts ?? o?.at ?? o?.finished_at ?? ""));
+          if (!Number.isNaN(t)) return t;
+        } catch { /* 半截行（正好切在 64KB 边界）跳过 */ }
+      }
+    } finally { closeSync(fd); }
+  } catch { /* 文件不在就当我不知道 */ }
+  return null;
+}
+
+/** run.json / worker.json 里的"最后动静"（created_at / heartbeat / updated_at） */
+function jsonTimeMs(file: string): number | null {
+  try {
+    const o = readJson<any>(file);
+    for (const k of ["heartbeat_at", "heartbeat", "updated_at", "finished_at", "created_at", "ts", "at"]) {
+      const v = o?.[k];
+      if (typeof v === "number" && v > 0) return v;
+      if (typeof v === "string") { const t = Date.parse(v); if (!Number.isNaN(t)) return t; }
+    }
+  } catch { /* 没有就算了 */ }
+  return null;
+}
+
+/**
+ * R5-05：run 最近一次"有动静"的时刻 —— 以**事件时间戳/心跳**为准（mtime 会被"复制/生成状态"污染），
+ * 全都没有时间戳时才退回文件 mtime。返回 now − last（ms），null = 没有任何时间信息。
+ */
+export function lastActivityMs(runsDir: string, rootId: string, nodes: { path: string }[], now: number): number | null {
+  let last = 0;
+  const take = (v: number | null) => { if (v != null && v > last && v <= now + 60_000) last = v; };
+  const base = join(runsDir, rootId);
+  take(jsonTimeMs(join(base, "run.json")));
+  for (const n of nodes) {
+    const d = join(base, "nodes", ...n.path.split("/"));
+    take(tailTsMs(join(d, "events.jsonl")));
+    take(jsonTimeMs(join(d, "worker.json")));
+    take(jsonTimeMs(join(d, "result.json")));
+    take(jsonTimeMs(join(d, "gate-req.json")));
+  }
+  if (!last) {   // 完全没有时间戳（老夹具）：只能退回 mtime
+    const touch = (p: string) => { try { const m = statSync(p).mtimeMs; if (m > last) last = m; } catch { /* */ } };
+    touch(join(base, "run.json"));
+    for (const n of nodes) touch(join(base, "nodes", ...n.path.split("/"), "events.jsonl"));
+  }
+  return last ? Math.max(0, now - last) : null;
+}
+
 function buildRunPart(runsDir: string, rootId: string, meta: any, now: number, stepLines: number, statTtl: number, paths: string[]): RunPart {
   const inboxLocal: InboxItem[] = [];
   let settledLocal: [string, string, string] | null = null;
@@ -1412,6 +1542,7 @@ function buildRunPart(runsDir: string, rootId: string, meta: any, now: number, s
       sum: rootNode?.r?.summary ?? "",                                   // 摘要（根 result）
       profile: typeof rootNode?.spec?.profile === "string" ? rootNode.spec.profile : null,
       parallel: typeof meta?.parallel === "number" ? meta.parallel : null,
+      idle_ms: lastActivityMs(runsDir, rootId, nodes, now),
       /* R5：审批模式 / 模型 / 档位都从根 spec 回显（派发时真的写进了 spec 才算数） */
       permission: typeof rootNode?.spec?.permission === "string" ? rootNode.spec.permission : null,
       tools: Array.isArray(rootNode?.spec?.tools) ? rootNode.spec.tools.map(String) : null,
@@ -1432,14 +1563,20 @@ function buildRunPart(runsDir: string, rootId: string, meta: any, now: number, s
     // inbox：waiting 节点 → 人工闸门条目（gate.run 由 buildView 落最终下标）
     for (const n of waiting) {
       const q = String(n.gate?.question ?? n.r?.summary ?? "");
+      /* R5-02：标题取第一行，描述只在"比标题多出信息"时才有值（单行问题不再说两遍） */
+      const qLines = q.split("\n").map(l => l.trim()).filter(Boolean);
+      const qTitle = wordCut(qLines[0] ?? "", 80);
+      const qRest = qLines.slice(1).join(" ").trim();
+      const qDesc = qRest && qRest !== qTitle ? qRest.slice(0, 200) : "";
+      /* R5-06：opts 第二格 = kind —— 删/拒绝/中止是 danger，允许类是 solid */
       const opts: [string, string, string][] = n.gate?.opts?.length
-        ? n.gate.opts.map((o: string) => [o, "", `已选择·${o}`] as [string, string, string]) // [文案, 图标位, 已选后文案]
-        : [["同意", "", "已同意"], ["拒绝", "", "已拒绝"]];
+        ? n.gate.opts.map((o: string) => [o, optKindOf(o), `已选择·${o}`] as [string, string, string]) // [文案, kind, 已选后文案]
+        : [["同意", "solid", "已同意"], ["拒绝", "danger", "已拒绝"]];
       const segs = n.path.split("/");
       const crumb = [meta?.subject ?? rootId, ...segs.map((_, i) => nodeName(runsDir, rootId, segs.slice(0, i + 1).join("/")))];
       inboxLocal.push({
         id: n.spec?.id ?? `node:${rootId}/${n.path}`,
-        t: q.split("\n")[0].slice(0, 80), d: q, crumb, opts,
+        t: qTitle, d: qDesc, crumb, opts,
         gate: { run: 0, nm: n.nm, pd: `回复已送达，${n.nm} 恢复执行`, sn: "已回复 · 节点恢复运行" },
       });
     }
@@ -1570,6 +1707,10 @@ function isAutoApplied(p: any): boolean {
   } catch { /* 目录读不到就当不是自动应用 */ }
   return false;
 }
+
+
+
+
 
 
 

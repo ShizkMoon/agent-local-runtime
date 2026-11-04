@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // ar CLI：无状态命令面。evd/受限入口/人工共用，统一 JSON envelope 输出
-import { createRun, writeSpec, readSpec, transitResult, checkRun, appendEvent, appendCmdOnce, readEventsSince, writeGate, abortWorker, forkNode, queueReply, RUNS_DIR, runsDir } from "./runs.ts";
+import { createRun, writeSpec, readSpec, transitResult, checkRun, appendEvent, appendCmdOnce, readEventsSince, writeGate, abortWorker, forkNode, queueReply, RUNS_DIR, runsDir, latestRunForCwd, resumeRun, appendLearnedEntry } from "./runs.ts";
 import { daemonLoop } from "./daemon.ts";
 import { listProposals, showProposal, applyProposal, rejectProposal, createProposal, ProposalError } from "./proposals.ts";
 import type { SpecEnvelope, NodeStatus } from "./envelope.ts";
@@ -88,12 +88,12 @@ async function main(): Promise<void> {
       if (task.profile !== undefined && task.profile !== null && !isProfile(task.profile)) {
         return out(false, cmd, undefined, { code: "BAD_INPUT", field: "profile", message: `profile 只接受 ${PROFILES.join("|")}，收到 ${JSON.stringify(task.profile)}` });
       }
-      const { rootId } = createRun({ kind: task.kind, subject });
+      const { rootId } = createRun({ kind: task.kind, subject, cwd: task.cwd });
       writeSpec(rootId, "root", {
         type: "assign",
         agent: task.agent ?? "pi",
         profile: task.profile,
-        model: task.model,
+        model: task.model ?? arg("--model"),
         goal: task.subject ?? task.description ?? "",
         inputs: task.payload ? [{ ref: task.payload }] : [],
         accept: task.accept ?? ["输出一句话执行摘要"],
@@ -131,6 +131,8 @@ async function main(): Promise<void> {
           // S22：并发策略与 token 预算透传（spawn 工具用）
           ...(arg("--tokens") ? { tokens: Number(arg("--tokens")) } : {}),
           ...(arg("--parallel") ? { parallel: Number(arg("--parallel")) } : {}),
+          // R6：上下文窗口覆盖（压缩阈值 = 该值 × 80%）
+          ...(arg("--context-tokens") ? { context_tokens: Number(arg("--context-tokens")) } : {}),
         },
         tools: arg("--tools")?.split(","),
         // S1 新字段：--approve/--deny/--deny-paths/--skills 分号分隔，--permission 档位，--rules JSON 或 pattern=>message;…
@@ -142,6 +144,30 @@ async function main(): Promise<void> {
         skills: arg("--skills")?.split(";").filter(Boolean),
       });
       return out(true, cmd, { root_id: rootId });
+    }
+    case "resume": {
+      // R6：接着上次干 —— 不给 --run 就按 cwd 找该目录最近一次 run（run.json.cwd）
+      const cwd = arg("--cwd") ?? process.cwd();
+      let rootId = arg("--run");
+      let matchedBy = "run";
+      if (!rootId) {
+        const hit = latestRunForCwd(cwd);
+        if (!hit) {
+          return out(false, "resume", undefined, {
+            code: "NOT_FOUND",
+            message: `在 ${cwd} 找不到可恢复的 run（按 run.json.cwd 匹配）`,
+            hint: "ar resume --run <id> 指定，或 ar run-create 先建一个",
+          });
+        }
+        rootId = hit.rootId;
+        matchedBy = `cwd:${cwd}`;
+      }
+      if (!readSpec(rootId, "root")) {
+        return out(false, "resume", undefined, { code: "NOT_FOUND", message: `run ${rootId} 没有根节点 spec`, hint: "用 --run 指定一个有 root 节点的 run" });
+      }
+      const text = arg("--text") ?? "继续上次任务（ar resume）";
+      const r = resumeRun(rootId, text);
+      return out(true, "resume", { ...r, matched_by: matchedBy });
     }
     case "check": {
       const rootId = arg("--run") ?? process.argv[3];
@@ -323,12 +349,20 @@ async function main(): Promise<void> {
           const slug = process.argv[4];
           if (!slug) return out(false, "propose:apply", undefined, { code: "USAGE", message: "ar propose apply <slug> [--force]" });
           const r = applyProposal(slug, { force: process.argv.includes("--force") });
+          // R6 learned 闭环：提案落地后追一条学习条目（下一次 worker 拉起会注入）
+          if (r.ok) {
+            try { appendLearnedEntry(`[proposal] ${slug} 已应用（risk=${r.risk ?? "?"}${r.auto ? "，auto" : ""}${r.files?.length ? `，files=${r.files.map((f) => f.path).join(",")}` : ""}）`); } catch { /* 记账失败不影响应用结果 */ }
+          }
           return r.ok ? out(true, "propose:apply", r) : out(false, "propose:apply", { result: r }, { code: r.code ?? "APPLY_FAILED", message: r.message });
         }
         if (sub === "reject") {
           const slug = process.argv[4];
           if (!slug) return out(false, "propose:reject", undefined, { code: "USAGE", message: "ar propose reject <slug> --reason <text>" });
-          const r = rejectProposal(slug, arg("--reason") ?? "");
+          const reason = arg("--reason") ?? "";
+          const r = rejectProposal(slug, reason);
+          if (r.ok) {
+            try { appendLearnedEntry(`[proposal] ${slug} 被拒（${reason || "未给原因"}）`); } catch { /* 同上 */ }
+          }
           return r.ok ? out(true, "propose:reject", r) : out(false, "propose:reject", undefined, { code: r.code ?? "REJECT_FAILED", message: r.message });
         }
         if (sub === "new") {
@@ -371,7 +405,7 @@ async function main(): Promise<void> {
     default:
       return out(false, "help", undefined, {
         code: "USAGE",
-        commands: ["run-create", "dispatch", "node-create", "spawn", "check", "reply", "gate", "done", "fail", "wait", "event", "events", "fork", "abort", "propose", "cmd", "daemon", "version"],
+        commands: ["run-create", "dispatch", "node-create", "resume", "spawn", "check", "reply", "gate", "done", "fail", "wait", "event", "events", "fork", "abort", "propose", "cmd", "daemon", "version"],
       });
   }
 }

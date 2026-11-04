@@ -16,6 +16,7 @@
    "sum": "agent_desktop list-apps 返回 4 个运行中应用（Weixin.exe、WindowsTerminal.exe、ego.exe、msedge.exe），原始输出见 artifacts/ad-fa7cd7db.txt",
    "profile": null,
    "parallel": null,
+   "idle_ms": 11070955,
    "permission": null,
    "tools": [
     "agent_desktop"
@@ -42,6 +43,7 @@
      "kind": "tool",
      "name": "agent_desktop",
      "args": "{\"argv\":[\"list-apps\"]}",
+     "arg_text": "text={\"argv\":[\"list-apps\"]}",
      "st": "ok",
      "exit": null,
      "ms": 19,
@@ -61,6 +63,7 @@
      "kind": "tool",
      "name": "ev_done",
      "args": "{\"summary\":\"agent_desktop list-apps 返回 4 个运行中应用（Weixin.exe、WindowsTerminal.exe、ego.exe、msedge.exe），原始输出见 artifacts/ad-fa7cd7db.txt\"}",
+     "arg_text": "{\"summary\":\"agent_desktop list-apps 返回 4 个运行中应用（Weixin.",
      "st": "ok",
      "exit": null,
      "ms": 64,

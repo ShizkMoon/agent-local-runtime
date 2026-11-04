@@ -10,7 +10,7 @@ import (
 )
 
 // harnessJS 是一个最小 DOM 桩：让 preload 脚本在 node 里跑一遍，
-// 验证「拖拽拦截 / @path 插入 / 更新提示」三条真实行为。
+// 验证「拖拽拦截 / @path 插入 / 快捷键面板 / 更新提示」四条真实行为。
 const harnessJS = `
 const fs = require('fs');
 const vm = require('vm');
@@ -19,6 +19,7 @@ const code = fs.readFileSync(process.argv[2], 'utf8');
 const calls = { input: 0, prevented: [], focus: 0 };
 const listeners = Object.create(null);
 const handlers = Object.create(null);
+const byId = Object.create(null);
 const appended = [];
 
 function makeTextarea() {
@@ -37,24 +38,30 @@ function makeTextarea() {
 }
 const ta = makeTextarea();
 
-function makePill() {
+function makeElement(tag) {
   return {
-    style: {},
+    tagName: tag || 'DIV',
     id: '',
-    tagName: 'DIV',
+    style: {},
+    innerHTML: '',
     textContent: '',
+    title: '',
     addEventListener: function () {},
-    remove: function () {},
+    remove: function () { if (this.id) delete byId[this.id]; },
+    stopPropagation: function () {},
   };
 }
 
 const document = {
   readyState: 'complete',
-  getElementById: function (id) { return id === 'cText' ? ta : null; },
+  getElementById: function (id) {
+    if (id === 'cText') return ta;
+    return byId[id] || null;
+  },
   querySelector: function () { return null; },
-  createElement: function () { return makePill(); },
+  createElement: function (tag) { return makeElement(tag); },
   addEventListener: function () {},
-  body: { appendChild: function (el) { appended.push(el); } },
+  body: { appendChild: function (el) { appended.push(el); if (el.id) byId[el.id] = el; } },
 };
 
 const win = {
@@ -88,6 +95,13 @@ function fire(type, files) {
   return ev;
 }
 
+function key(opts) {
+  const ev = Object.assign({ type: 'keydown', preventDefault: function () {}, stopPropagation: function () {} }, opts);
+  const ls = listeners['keydown'] || [];
+  for (const l of ls) l.fn(ev);
+  return ev;
+}
+
 fire('dragover', [{}]);
 fire('drop', [{}]);
 
@@ -106,15 +120,26 @@ const hs = listeners['hashchange'] || [];
 for (const l of hs) l.fn({ type: 'hashchange' });
 const focusAfterHash = calls.focus;
 
-const pill = appended.length ? appended[0] : null;
+// Ctrl+/ 打开快捷键面板，Esc 关闭。
+key({ key: '/', code: 'Slash', ctrlKey: true, altKey: false, metaKey: false });
+const shortcutEl = document.getElementById('aica-shortcuts');
+const shortcutOpen = !!shortcutEl;
+const shortcutHTML = shortcutEl ? String(shortcutEl.innerHTML) : '';
+key({ key: 'Escape' });
+const shortcutClosed = !document.getElementById('aica-shortcuts');
+
+const pillEl = appended.filter(function (e) { return e.id === 'aica-update-pill'; })[0];
 process.stdout.write(JSON.stringify({
   prevented: calls.prevented,
   inputEvents: calls.input,
   valueAfterApi: valueAfterApi,
   valueAfterEvent: valueAfterEvent,
   focusAfterHash: focusAfterHash,
-  pillCount: appended.length,
-  pillText: pill ? String(pill.textContent) : '',
+  shortcutOpen: shortcutOpen,
+  shortcutHTML: shortcutHTML,
+  shortcutClosed: shortcutClosed,
+  pillCount: appended.filter(function (e) { return e.id === 'aica-update-pill'; }).length,
+  pillText: pillEl ? String(pillEl.textContent) : '',
 }));
 `
 
@@ -124,6 +149,9 @@ type preloadResult struct {
 	ValueAfterAPI  string   `json:"valueAfterApi"`
 	ValueAfterEvt  string   `json:"valueAfterEvent"`
 	FocusAfterHash int      `json:"focusAfterHash"`
+	ShortcutOpen   bool     `json:"shortcutOpen"`
+	ShortcutHTML   string   `json:"shortcutHTML"`
+	ShortcutClosed bool     `json:"shortcutClosed"`
 	PillCount      int      `json:"pillCount"`
 	PillText       string   `json:"pillText"`
 }
@@ -185,6 +213,21 @@ func TestPreloadDragGuardAndInsertion(t *testing.T) {
 	}
 	if res.PillCount != 0 {
 		t.Fatalf("没有更新时不应出现提示 pill，got %d", res.PillCount)
+	}
+}
+
+func TestPreloadShortcutsPanel(t *testing.T) {
+	res := runPreload(t, buildPreload(nil))
+	if !res.ShortcutOpen {
+		t.Fatal("Ctrl+/ 应打开快捷键面板")
+	}
+	for _, want := range []string{"Ctrl+K", "Ctrl+,", "Ctrl+/", "Ctrl+Alt+A", "Esc", "批准", "拒绝"} {
+		if !strings.Contains(res.ShortcutHTML, want) {
+			t.Errorf("快捷键面板缺少 %q", want)
+		}
+	}
+	if !res.ShortcutClosed {
+		t.Fatal("Esc 应关闭快捷键面板")
 	}
 }
 

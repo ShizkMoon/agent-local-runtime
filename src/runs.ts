@@ -1,7 +1,8 @@
 // runs/ 运行目录操作：唯一的运行状态源，全部纯文件
 import { mkdirSync, writeFileSync, readFileSync, existsSync, readdirSync, appendFileSync, renameSync, unlinkSync, statSync, cpSync } from "node:fs";
 import { execFileSync } from "node:child_process";
-import { join, resolve } from "node:path";
+import { createHash } from "node:crypto";
+import { join, resolve, dirname } from "node:path";
 import type { SpecEnvelope, ResultEnvelope, EventRecord, NodeStatus } from "./envelope.ts";
 import { nodeId, stableId } from "./envelope.ts";
 
@@ -41,15 +42,24 @@ export interface RunMeta {
   plan_version: number;
   /** S22：该 run 的并发上限（缺省 2）；spec.budget.parallel 优先 */
   parallel?: number;
+  /** R6：发起时的项目目录（ar resume 按它找最近一次 run；老 run 没有就是 null） */
+  cwd?: string;
 }
 
 /** 创建 Run：写 index + plan.v1 + 根节点目录 */
-export function createRun(opts: { kind?: string; subject?: string }): { rootId: string; dir: string } {
+export function createRun(opts: { kind?: string; subject?: string; cwd?: string }): { rootId: string; dir: string } {
   runsDir();
   const rootId = stableId(opts.subject ?? "run", Date.now().toString()).slice(0, 13);
   const dir = runDir(rootId);
   mkdirSync(dir, { recursive: true });
-  const meta: RunMeta = { root_id: rootId, created_at: new Date().toISOString(), kind: opts.kind, subject: opts.subject, plan_version: 1 };
+  const meta: RunMeta = {
+    root_id: rootId,
+    created_at: new Date().toISOString(),
+    kind: opts.kind,
+    subject: opts.subject,
+    plan_version: 1,
+    cwd: resolve(opts.cwd ?? process.cwd()),
+  };
   writeJson(join(dir, "run.json"), meta);
   // coverage/paths 字段先空着：orchestrator 写 plan 时填（schema 松，S9）
   writeJson(join(dir, "plan.v1.json"), { version: 1, created_at: meta.created_at, nodes: [], coverage: [], paths: [] });
@@ -643,4 +653,77 @@ export function forkNode(rootId: string, path: string): ForkResult | null {
   if (meta) writeJson(metaFile, { ...meta, forked_from });
   appendFileSync(INDEX, JSON.stringify({ ts: forked_from.at, event: "fork", root_id: newId, from: rootId, node: path }) + "\n", "utf8");
   return { root_id: newId, node: nodeId(newId, "root"), path: "root", forked_from };
+}
+
+// ---------------------------------------------------------------- R6：resume（接着上次干）
+
+/** 按 cwd 找最近一次 run：run.json.cwd 归一后相等，取 run.json mtime 最新；老 run 没有 cwd 不算 */
+export function latestRunForCwd(dir: string): { rootId: string; meta: RunMeta; mtimeMs: number } | null {
+  runsDir();
+  const want = resolve(dir);
+  let best: { rootId: string; meta: RunMeta; mtimeMs: number } | null = null;
+  for (const rootId of readdirSync(RUNS_DIR)) {
+    const f = join(runDir(rootId), "run.json");
+    if (!existsSync(f)) continue;
+    let meta: RunMeta;
+    try { meta = JSON.parse(readFileSync(f, "utf8")); } catch { continue; }
+    if (!meta?.root_id || !meta.cwd) continue;
+    if (resolve(String(meta.cwd)) !== want) continue;
+    const mtimeMs = statSync(f).mtimeMs;
+    if (!best || mtimeMs > best.mtimeMs) best = { rootId, meta, mtimeMs };
+  }
+  return best;
+}
+
+/**
+ * R6 resume：把 text 当新一轮注入并拉起。
+ * · 节点还在跑/等待/没有 result → 直接 queueReply（waiting 会被归档成 running，下一轮带上 reply）
+ * · 节点已终态（done/failed）→ 旧 result 归档为 result.prev.json + 写 resume 事件，再重新排队（同一 session 续跑）
+ */
+export function resumeRun(
+  rootId: string,
+  text: string,
+  path = "root",
+): { root_id: string; node: string; resumed_from: NodeStatus | null; delivery: string } {
+  const spec = readSpec(rootId, path);
+  if (!spec) throw new Error(`NO_NODE ${path}`);
+  const prev = readResult(rootId, path);
+  if (prev && (prev.status === "done" || prev.status === "failed")) {
+    writeJson(join(nodeDir(rootId, path), "result.prev.json"), prev);
+    try { unlinkSync(join(nodeDir(rootId, path), "result.json")); }
+    catch { /* 已不在 = 无需归档 */ }
+    appendEvent(rootId, path, {
+      kind: "resume",
+      data: { from: prev.status, summary: prev.summary, text: String(text ?? "").slice(0, 500) },
+    });
+  }
+  const q = queueReply(rootId, path, text);
+  const delivery = prev && (prev.status === "done" || prev.status === "failed") ? "resumed" : q.delivery;
+  return { root_id: rootId, node: q.node, resumed_from: prev?.status ?? null, delivery };
+}
+
+// ---------------------------------------------------------------- R6：learned.md 闭环
+
+/** 全局经验文件（ev_learn 与 daemon 注入共用同一份） */
+export function learnedPath(): string {
+  return join(STATE, "memory", "learned.md");
+}
+
+/**
+ * 追加一条学习条目（与 ev_learn 同格式：`## <iso> · sha1:<hex>` + 正文）。
+ * 手工/CLI 产生的闭环条目（如提案已应用/被拒）走这里，保证 tools.ts 的 parseLearned 能原样保留。
+ * @returns 是否真的写入（sha1 去重命中返回 false）
+ */
+export function appendLearnedEntry(text: string): boolean {
+  const body = String(text ?? "").trim();
+  if (!body) return false;
+  const file = learnedPath();
+  const sha = createHash("sha1").update(body).digest("hex").slice(0, 10);
+  const cur = existsSync(file) ? readFileSync(file, "utf8") : "";
+  const blocks = cur.split(/^## /m).filter((b) => b.trim()).map((b) => "## " + b.trimEnd());
+  if (blocks.some((b) => b.includes(`sha1:${sha}`))) return false;
+  mkdirSync(dirname(file), { recursive: true });
+  const entry = `## ${new Date().toISOString()} · sha1:${sha}\n${body}`;
+  writeFileSync(file, [entry, ...blocks].slice(0, 50).join("\n\n") + "\n", "utf8");
+  return true;
 }

@@ -127,6 +127,20 @@ export async function getJson(url) {
   return { status: r.status, json, text };
 }
 
+/** POST JSON → {status, json, text}（不抛：4xx/5xx 交给断言判断） */
+export async function postJson(url, body) {
+  const r = await fetch(url, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body ?? {}),
+    signal: AbortSignal.timeout(20000),
+  });
+  const text = await r.text();
+  let json = null;
+  try { json = JSON.parse(text); } catch { /* 同上 */ }
+  return { status: r.status, json, text };
+}
+
 export async function waitFor(fn, { timeoutMs = 15000, intervalMs = 100, label = "condition" } = {}) {
   const t0 = Date.now();
   let last = null;

@@ -102,6 +102,9 @@ func main() {
 			return
 		}
 
+		// 错误页服务要先起：窗口的导航白名单里要放行它。
+		startErrorServer()
+
 		// 代码是否比运行中的桥新：只决定底部一次性提示，不自动重启。
 		notice := detectUpdate()
 
@@ -125,6 +128,13 @@ func main() {
 		wireWindow(mainWin)
 		createTray()
 		registerHotkey()
+		startApprovalsWatch()
+		if currentBridge() != nil {
+			go superviseBridge()
+			log.Printf("桥自愈监控已启动（本进程拉起的 bridge）")
+		} else {
+			log.Printf("复用的外部桥不归本进程监控（没有子进程可等）")
+		}
 	})
 
 	// App.Quit / 托盘退出都会走到这里；只回收自己拉起的 node。
@@ -158,6 +168,10 @@ func wireWindow(win *mygo.Window) {
 		}
 	})
 
+	// 窗口重新出现/获得焦点时立刻刷新待裁决徽标，不等 30s 轮询。
+	win.OnShow(requestApprovalRefresh)
+	win.OnFocus(requestApprovalRefresh)
+
 	// 页面自己拿不到 WebView2 里 File 的绝对路径；MyGo 的原生拖放事件有。
 	// preload 已订阅 mygo:file-drop 做插入，这里只留诊断日志。
 	win.OnFileDrop(func(e *mygo.FileDropEvent) {
@@ -176,6 +190,8 @@ func wireWindow(win *mygo.Window) {
 			switch {
 			case strings.HasPrefix(e.URL, viewURL), e.URL == "about:blank":
 				return // 本应用页面（含 #new 之类的 hash）
+			case errorBase != "" && strings.HasPrefix(e.URL, errorBase):
+				return // 自愈失败时的本地错误页
 			case u.Scheme == "file", u.Scheme == "data", u.Scheme == "blob":
 				e.PreventDefault()
 				log.Printf("已拦截拖入/点击的本地导航: %s", e.URL)
@@ -241,6 +257,7 @@ func showWindow() {
 		mainWin.Show()
 	}
 	mainWin.Focus()
+	requestApprovalRefresh() // 回到前台立刻刷新一次待裁决徽标
 }
 
 // toggleWindow 是热键行为：已在前台 → 收起；否则显示并聚焦。
@@ -421,11 +438,10 @@ func detectUpdate() *updateNotice {
 
 // openLog 打开 <state>/workbench-shell.log（超过 1MB 先清空）；打不开就只写 stderr。
 func openLog() *os.File {
-	state := ensureStateDir()
-	if state == "" {
+	path := shellLogPath()
+	if path == "" {
 		return nil
 	}
-	path := filepath.Join(state, "workbench-shell.log")
 	flags := os.O_APPEND | os.O_CREATE | os.O_WRONLY
 	if st, err := os.Stat(path); err == nil && st.Size() > 1<<20 {
 		flags = os.O_TRUNC | os.O_CREATE | os.O_WRONLY
@@ -440,6 +456,7 @@ func openLog() *os.File {
 // fail 报错并退出：原生对话框（窗口尚未创建，WebView 不可用）。
 func fail(what string, err error) {
 	log.Printf("%s: %v", what, err)
+	stopServer()
 	mygo.Dialog.Error(appTitle, fmt.Sprintf("%s\n\n%v", what, err))
 	mygo.App.Exit(1)
 }
@@ -591,35 +608,41 @@ func startServer() error {
 		env = append(env, "AICA_REPO_ROOT="+root)
 	}
 
-	nodeCmd = exec.Command(node, server)
-	nodeCmd.Env = env
-	hideConsole(nodeCmd)
+	cmd := exec.Command(node, server)
+	cmd.Env = env
+	hideConsole(cmd)
 
 	if err := os.MkdirAll(state, 0o755); err == nil {
 		if f, err := os.OpenFile(filepath.Join(state, "workbench-server.log"),
 			os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644); err == nil {
-			nodeCmd.Stdout, nodeCmd.Stderr = f, f
+			cmd.Stdout, cmd.Stderr = f, f
 		}
 	}
 
-	if err := nodeCmd.Start(); err != nil {
-		nodeCmd = nil
+	if err := cmd.Start(); err != nil {
+		setBridge(nil)
 		return fmt.Errorf("spawn node %s: %w", server, err)
 	}
-	log.Printf("拉起 workbench 桥 pid=%d  %s %s", nodeCmd.Process.Pid, node, server)
+	setBridge(cmd)
+	log.Printf("拉起 workbench 桥 pid=%d  %s %s", cmd.Process.Pid, node, server)
 	return nil
 }
 
 // stopServer 只杀自己拉起的 node（Process.Kill ≈ TerminateProcess）；
 // 桥内 detached 的 ar daemon 不属于它，留给 server.ts 的进程表去重管。
 func stopServer() {
-	if nodeCmd == nil || nodeCmd.Process == nil {
+	bridgeMu.Lock()
+	cmd := nodeCmd
+	if nodeCmd == cmd {
+		nodeCmd = nil
+	}
+	bridgeMu.Unlock()
+	if cmd == nil || cmd.Process == nil {
 		return
 	}
-	if nodeCmd.ProcessState == nil { // 已退出过的不再杀
-		if err := nodeCmd.Process.Kill(); err == nil {
-			log.Printf("已回收 workbench 桥 pid=%d", nodeCmd.Process.Pid)
+	if cmd.ProcessState == nil { // 已退出过的不再杀
+		if err := cmd.Process.Kill(); err == nil {
+			log.Printf("已回收 workbench 桥 pid=%d", cmd.Process.Pid)
 		}
 	}
-	nodeCmd = nil
 }

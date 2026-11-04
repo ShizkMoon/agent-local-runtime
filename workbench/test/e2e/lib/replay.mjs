@@ -179,13 +179,16 @@ export function snapshotFile(store, name) {
 /** 与 view.test.ts 同一套语义：缺文件即创建；UPDATE_SNAPSHOTS=1 时重写 */
 export function matchSnapshot(store, name, actual) {
   const file = snapshotFile(store, name);
+  // 行尾归一：仓库里 autocrlf/编辑器会把快照改成 CRLF，语义相同就不该红
+  const norm = (s) => String(s).replace(/\r\n/g, "\n");
   if (!existsSync(file) || process.env.UPDATE_SNAPSHOTS === "1") {
     mkdirSync(store, { recursive: true });
-    writeFileSync(file, actual + "\n", "utf8");
+    writeFileSync(file, norm(actual) + "\n", "utf8");
     return { created: true, file };
   }
-  const want = readFileSync(file, "utf8").trimEnd();
-  return { created: false, file, ok: actual === want, want };
+  const want = norm(readFileSync(file, "utf8")).trimEnd();
+  const now = norm(actual).trimEnd();
+  return { created: false, file, ok: now === want, want };
 }
 
 export function statOf(dir) {

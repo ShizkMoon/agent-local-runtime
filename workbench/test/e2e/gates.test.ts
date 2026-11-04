@@ -87,8 +87,31 @@ test("G-2 状态机门：终止态不可被覆写；只有 waiting 能被归档�
   r.cleanup();
 });
 
-test("G-2 状态机门（严格态）：非法迁移要主动报错——当前未实现则记录", (t) => {
-  t.skip("待实现：writeResult 目前静默忽略非法迁移（先写者胜），没有返回错误码；S21 的归宿靠 pendingNodes 收口而非写入口校验");
+test("G-2 状态机门（严格态）：非法迁移 → ILLEGAL_TRANSITION + state_reject，result.json 原样", async (t) => {
+  const r = await runScenario("illegal-transition");
+  if (r.code !== 0 || !r.result) { t.diagnostic(r.stderr.slice(0, 600)); assert.fail(`场景退出码 ${r.code}`); }
+  const s = r.result;
+  assert.equal(s.done.ok, true);
+  assert.equal(s.done.status, "done");
+  assert.equal(s.bad.ok, false, "done → failed 必须被拒");
+  assert.equal(s.bad.code, "ILLEGAL_TRANSITION", "拒绝理由要能机器判读");
+  assert.equal(s.bad.from, "done");
+  assert.equal(s.bad.to, "failed");
+  assert.equal(s.unchanged, true, "被拒后 result.json 必须字节不变");
+  assert.equal(s.finalStatus, "done", "旧状态必须保留");
+  assert.equal(s.finalSummary, "第一次收尾", "旧 summary 不许被后来者覆盖");
+  assert.equal(s.resolved, false, "done 不许被 resolveWaiting 归档回 running");
+  assert.ok(s.rejects.length >= 2, `state_reject 事件应有 ≥2 条（实际 ${JSON.stringify(s.rejects)}）`);
+  assert.equal(s.rejects[0].from, "done");
+  assert.equal(s.rejects[0].to, "failed");
+  assert.ok(typeof s.rejects[0].source === "string" && s.rejects[0].source.length > 0, "拒绝要记来源（谁想改）");
+  assert.ok(s.rejects.some((x) => x.source === "resolveWaiting"), "resolveWaiting 的拒绝也要留痕");
+  // CLI 入口：同样的迁移必须同样被拒，且退出码非 0
+  assert.equal(s.cli.ok, false, "CLI 也要回 ok:false 的 envelope");
+  assert.equal(s.cli.errCode, "ILLEGAL_TRANSITION");
+  assert.notEqual(s.cli.exit, 0, "坏迁移不许退出码 0");
+  assert.match(String(s.cli.msg), /终止态|非法/);
+  r.cleanup();
 });
 
 // ---------------------------------------------------------------- G-3 恢复门

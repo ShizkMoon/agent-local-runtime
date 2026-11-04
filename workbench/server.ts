@@ -9,7 +9,7 @@ import { join, normalize, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFile, execFileSync, spawn, type ChildProcess } from "node:child_process";
 // S16：视图投影住在 view.ts（纯函数，runsDir 由参数传入）；本文件只做 HTTP 胶水
-import { buildView, okId, badSeg, readJson, safeJoinIn, nodePaths, nodeStatus, evHint, runPulse, viewCacheStats, clearViewCache, approvalState, proposalDetail, mergeProposal, filterProposals } from "./view.ts";
+import { buildView, okId, badSeg, readJson, safeJoinIn, nodePaths, nodeStatus, evHint, runPulse, viewCacheStats, clearViewCache, approvalState, proposalDetail, mergeProposal, filterProposals, optKindOf } from "./view.ts";
 import { arEnv, spawnDaemon, repoRoot } from "./spawn.ts";
 import { gitStatus, gitDiff, gitCommit, readAsk, writeAsk, clearAsk, runCwd, type GitAsk } from "./git.ts";
 // S19：审批决策闭集由 gate.ts 持有（唯一真相），桥只做校验与落盘
@@ -665,7 +665,14 @@ function apiApprovals(res: any): void {
           run: ent.name, path: p,
           call_id: r.call_id ?? null, tool: r.tool ?? null, tier: r.tier ?? null, target: r.target ?? null,
           restricted: !!r.restricted, reason: r.reason ?? "", args: r.args ?? null, targets: r.targets ?? [],
-          opts: Array.isArray(r.opts) ? r.opts : [], asked_at: r.asked_at ?? null, age_ms: pend.age_ms,
+          /* R5-06：kind 由服务端补（gate 只给 label/decision/scope；删除/拒绝类是 danger） */
+          opts: Array.isArray(r.opts)
+            ? r.opts.map((o: any) => ({
+              ...o,
+              kind: o?.kind ?? (optKindOf(o?.label) || (o?.decision === "rejected" ? "danger" : o?.decision === "allowed-once" ? "solid" : "")),
+            }))
+            : [],
+          asked_at: r.asked_at ?? null, age_ms: pend.age_ms,
         });
       }
     }

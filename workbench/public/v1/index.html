@@ -761,6 +761,25 @@ button.stp-h:hover{background:var(--hov)}
 .planc-t{margin:6px 0 0;white-space:pre-wrap;font-family:var(--f-serif);font-size:14.5px;line-height:1.7;color:var(--t1);max-height:340px;overflow:auto}
 .planc-f{display:flex;align-items:center;gap:10px;margin-top:12px;padding-top:10px;border-top:1px solid var(--ln);flex-wrap:wrap}
 .planc-h{font-size:12px;color:var(--t3)}
+/* R6：工具行原始参数 / 卡住态 / 面板分组 / 折叠 / 阈值选择 */
+.stp-raw{margin-top:6px;padding:5px 8px;border:1px dashed var(--ln);border-radius:var(--r-ctl);font-family:var(--f-mono);font-size:11px;color:var(--t3);white-space:pre-wrap;word-break:break-all;max-height:90px;overflow:auto}
+.pill.stale{background:color-mix(in srgb,var(--warn) 16%,transparent);color:var(--warn)}
+.pill.stale i{background:var(--warn)}
+.wait.stale{color:var(--warn)}
+.wait.stale .sh{border-color:var(--warn);animation:none}
+.wk-btn{margin-left:6px;padding:2px 8px;border:1px solid var(--ln);border-radius:999px;background:var(--s2);color:var(--t2);font:inherit;font-size:11.5px;cursor:pointer}
+.wk-btn:hover{border-color:var(--ln-hi);color:var(--t1)}
+.pal-g{padding:8px 10px 2px;font-size:11px;color:var(--t3);letter-spacing:.04em}
+.test-grp{display:flex;align-items:center;gap:6px;height:30px;padding:0 10px;border-radius:var(--r-ctl);font-size:13px;color:var(--t2);cursor:pointer;white-space:nowrap}
+.test-grp:hover{background:var(--hov);color:var(--t1)}
+.test-grp .gg{flex:none;color:var(--t3);font-size:10px}
+.test-grp .cnt{color:var(--t3);font-size:11px}
+.test-grp.open + .test-row{padding-left:22px}
+.set-more{margin:6px 10px 2px;padding:4px 10px;border:1px solid var(--ln);border-radius:999px;background:var(--s1);color:var(--t2);font:inherit;font-size:11.5px;cursor:pointer}
+.set-more:hover{border-color:var(--ln-hi);color:var(--t1)}
+.idle-seg{display:flex;gap:4px;flex:none}
+.idleb{padding:3px 8px;border:1px solid var(--ln);border-radius:999px;background:var(--s1);color:var(--t2);font:inherit;font-size:11.5px;cursor:pointer}
+.idleb.on{border-color:var(--accent);background:var(--accent-soft);color:var(--t1)}
 /* R5：审批模式徽标 / Git 页签 / 通知 */
 .th-badges{display:flex;align-items:center;gap:6px;flex:none}
 .mbadge{display:inline-flex;align-items:center;height:18px;padding:0 7px;border-radius:999px;border:1px solid var(--ln);font-size:11px;color:var(--t2);background:var(--s2);white-space:nowrap}
@@ -970,8 +989,13 @@ function mergeApprovalsIntoInbox(){
   }));
 }
 function approvalTitle(a){
-  var t = a.tool || "工具";
-  return a.target ? t + " · " + a.target : t;
+  /* R5-02：标题只说"要做什么动作"；命令进 <pre>、理由进 .why，不再重复拼 target */
+  var t = String(a.tool || "").toLowerCase();
+  if(/bash|powershell|pwsh|shell|exec|terminal/.test(t)) return "执行命令";
+  if(/delete|rm\b|remove|unlink/.test(t)) return "删除文件";
+  if(/write|edit|patch|apply|create/.test(t)) return "修改文件";
+  if(/git/.test(t)) return "提交改动";
+  return "运行 " + (a.tool || "工具");
 }
 /* 只有「当前这条 run」的审批才接管输入框：别的 run 的待答卡在右栏，不该让这条 run 打不了字 */
 function pendingApprovalForComposer(){
@@ -1082,7 +1106,8 @@ $("#themeBtn").addEventListener("click",function(){
 
 /* ================= sidebar ================= */
 /* 四态色只表达紧急度：等你(琥珀) > 失败(玫瑰) > 进行中(clay=在场) > 已完成(中性) */
-function pillOf(a){
+function pillOf(a, r){
+  if(r && isStale(r)) return '<span class="pill stale"><i></i>卡住?</span>';
   if(a==="blocked") return '<span class="pill blocked"><i></i>等你</span>';
   if(a==="working") return '<span class="pill working"><i></i>进行中</span>';
   if(a==="failed")  return '<span class="pill failed"><i></i>失败</span>';
@@ -1092,7 +1117,7 @@ function runCardHtml(r,i){
   var a = aggOf(r);
   var extra = (a==="blocked" && r.agg_n>1) ? '<span class="cnt num">'+r.agg_n+' 项</span>' : "";
   return '<button class="run-card'+(i===currentRun?' on':'')+'" data-run="'+i+'">'+
-    '<span class="r1">'+pillOf(a)+extra+'<span class="dur num">'+esc(r.dur)+(r.spent?' · Σ'+fmtTok(r.spent):'')+'</span></span>'+
+    '<span class="r1">'+pillOf(a,r)+extra+'<span class="dur num">'+esc(r.dur)+(r.spent?' · Σ'+fmtTok(r.spent):'')+'</span></span>'+
     '<span class="ttl">'+esc(r.title)+'</span>'+
     '<span class="meta">'+esc(r.snippet)+'</span></button>';
 }
@@ -1104,6 +1129,8 @@ function isTestRun(r){
   return r.test_like === true || TEST_RE.test(String(r.title||"")) || TEST_RE.test(String(r.snippet||""));
 }
 var testOpen = (function(){ try{ return localStorage.getItem("aica-v1-testgroup")==="1"; }catch(e){ return false; } })();
+var testGroupOpen = {};   /* R5-04：同名测试组展开状态（本场有效） */
+var settledAll = false;   /* R5-04：已结束默认 10 条，点了「显示全部」才全展开 */
 function renderSidebar(){
   /* P5：按紧急度分三段 —— 等你 > 失败 > 进行中；done 沉到「已结束」，done 不冒泡 */
   var wait = [], fail = [], live = [], testRuns = [];
@@ -1135,16 +1162,37 @@ function renderSidebar(){
   var cnt = $("#testCnt"); if(cnt) cnt.textContent = String(testN);
   var tog = $("#testTog"); if(tog) tog.setAttribute("aria-expanded", testOpen ? "true" : "false");
   var tl = $("#testList"); if(tl) tl.hidden = !testOpen;
-  if(tl) tl.innerHTML = testRuns.map(function(p){
-    var r = p[0];
-    return '<div class="test-row" data-run="'+p[1]+'"><span class="dot '+esc(r.agg||r.status||"working")+'"></span>'+
-      '<span class="t">'+esc(r.title||r.id)+'</span><span class="tm">'+esc(r.dur||"")+'</span></div>';
-  }).join("") + setTest.map(function(p){
-    return '<div class="test-row" data-s="'+p[1]+'"><span class="dot done"></span>'+
-      '<span class="t">'+esc(p[0][0])+'</span><span class="tm">'+esc(p[0][1])+'</span></div>';
+  /* R5-04：同名 run 折叠成一组（smoke-e2e ×6），点开展开 */
+  var testEntries = [];
+  testRuns.forEach(function(p){ testEntries.push({ title:String(p[0].title||p[0].id), dur:p[0].dur||"", run:p[1], agg:p[0].agg||p[0].status||"working" }); });
+  setTest.forEach(function(p){ testEntries.push({ title:String(p[0][0]||""), dur:p[0][1]||"", settled:p[1], agg:"done" }); });
+  var tGroups = [], tMap = {};
+  testEntries.forEach(function(e){
+    if(!tMap[e.title]){ tMap[e.title] = { title:e.title, items:[] }; tGroups.push(tMap[e.title]); }
+    tMap[e.title].items.push(e);
+  });
+  var rowOf = function(e){
+    if(e.run != null) return '<div class="test-row" data-run="'+e.run+'"><span class="dot '+esc(e.agg)+'"></span>'+
+      '<span class="t">'+esc(e.title)+'</span><span class="tm">'+esc(e.dur)+'</span></div>';
+    return '<div class="test-row" data-s="'+e.settled+'"><span class="dot done"></span>'+
+      '<span class="t">'+esc(e.title)+'</span><span class="tm">'+esc(e.dur)+'</span></div>';
+  };
+  if(tl) tl.innerHTML = tGroups.map(function(g){
+    if(g.items.length === 1) return rowOf(g.items[0]);
+    var open = !!testGroupOpen[g.title];
+    return '<div class="test-grp'+(open?" open":"")+'" data-g="'+esc(g.title)+'">'+
+      '<span class="gg">'+(open?"▾":"▸")+'</span><span class="t">'+esc(g.title)+'</span>'+
+      '<span class="cnt num">×'+g.items.length+'</span></div>'+
+      (open ? g.items.map(rowOf).join("") : "");
   }).join("");
-  each("#testList .test-row",function(el){
+  each("#testList .test-grp",function(el){
     el.addEventListener("click",function(){
+      var k = el.dataset.g; testGroupOpen[k] = !testGroupOpen[k]; renderSidebar();
+    });
+  });
+  each("#testList .test-row",function(el){
+    el.addEventListener("click",function(e){
+      e.stopPropagation();
       if(el.dataset.run != null){ selectRun(+el.dataset.run); return; }
       var s = SETTLED[+el.dataset.s];
       for(var i=0;i<RUNS.length;i++) if(RUNS[i].id===s[2]){ selectRun(i); return; }
@@ -1160,11 +1208,17 @@ function renderSidebar(){
     });
   }
 
-  $("#settledList").innerHTML = setNormal.length ? setNormal.map(function(p){
+  /* R5-04：已结束默认最近 10 条 + 「显示全部」 */
+  var settledLimit = settledAll ? setNormal.length : 10;
+  var settledShown = setNormal.slice(0, settledLimit);
+  $("#settledList").innerHTML = (setNormal.length ? settledShown.map(function(p){
     var s = p[0], i = p[1];
     return '<div class="set-row"><button class="set-open" data-s="'+i+'"><span class="t">'+esc(s[0])+'</span><span class="tm">'+esc(s[1])+'</span></button>'+
       '<button class="set-del" data-s="'+i+'" aria-label="删除记录">×</button></div>';
-  }).join("") : '<div class="empty-note">暂无记录</div>';
+  }).join("") : '<div class="empty-note">暂无记录</div>')
+    + (setNormal.length > 10 ? '<button class="set-more" id="setMore">'+(settledAll ? "收起" : "显示全部 "+setNormal.length+" 条")+'</button>' : "");
+  var more = $("#setMore");
+  if(more) more.addEventListener("click", function(){ settledAll = !settledAll; renderSidebar(); });
   each("#settledList .set-open",function(el){
     el.addEventListener("click",function(){
       var s = SETTLED[+el.dataset.s];
@@ -1435,15 +1489,17 @@ function stepHtml(s, scope){
   var ex = (typeof s.exit==="number") ? '<span class="stp-exit">exit '+esc(s.exit)+'</span>' : "";
   var ms = stepMs(s.ms);
   return '<li class="stp stp-t'+(open?" open":"")+'" data-s="'+esc(st)+'" data-i="'+esc(s.i)+'">'+
-    '<button class="stp-h" aria-expanded="'+(open?"true":"false")+'" title="'+esc(s.args||"")+'">'+
+    '<button class="stp-h" aria-expanded="'+(open?"true":"false")+'" title="'+esc(s.arg_text||s.args||"")+'">'+
       '<span class="sg">'+g+'</span>'+
       '<span class="stp-line">'+
         '<span class="stp-ic" aria-hidden="true">'+(STEP_IC[s.kind]||STEP_IC.tool)+'</span>'+
         '<span class="stp-name">'+esc(s.name||"tool")+'</span>'+
-        (s.args?'<span class="stp-args">'+esc(s.args)+'</span>':"")+
+        ((s.arg_text||s.args)?'<span class="stp-args">'+esc(s.arg_text||s.args)+'</span>':"")+
       '</span>'+ ex + (ms?'<span class="tm num">'+esc(ms)+'</span>':"") + CHEV+
     '</button>'+
-    '<div class="stp-out"><pre class="sh-log">'+esc(out.length ? out.join("\n") : "（无输出）")+'</pre>'+stepFootHtml(s)+'</div></li>';
+    '<div class="stp-out"><pre class="sh-log">'+esc(out.length ? out.join("\n") : "（无输出）")+'</pre>'+
+      (s.args && s.args !== (s.arg_text||"") ? '<div class="stp-raw">原始参数 '+esc(s.args)+'</div>' : "")+
+      stepFootHtml(s)+'</div></li>';
 }
 /* ---------- S25：结论块 / 验收条 / 过程组头（P3/P4/P14） ---------- */
 /* 结论：页面上唯一"读"的内容（衬线、正文级），与过程（等宽小字）形成层级差 */
@@ -1536,6 +1592,35 @@ function aggOf(r){
   if(r.agg) return r.agg;                            /* view.ts 的 max(子节点) 是唯一权威 */
   return r.status === "input" ? "blocked" : (r.status || "working");
 }
+/* R5-05：僵尸「进行中」—— 最近事件/心跳超过阈值就算"疑似卡住"；等你回答（blocked）不算卡住 */
+var IDLE_MS = (function(){
+  var v = 0; try{ v = parseInt(localStorage.getItem("aica-v1-idle-ms")||"",10); }catch(e){}
+  return (v && v >= 10000) ? v : 10*60*1000;
+})();
+function setIdleMs(ms){
+  IDLE_MS = ms;
+  try{ localStorage.setItem("aica-v1-idle-ms", String(ms)); }catch(e){}
+  renderIdleSeg(); scheduleFetch();
+}
+function isStale(r){
+  if(!r || r.idle_ms == null) return false;
+  var a = aggOf(r);
+  if(a === "done" || a === "blocked") return false;   /* 完成 / 等你回答 都不是卡住 */
+  return r.idle_ms > IDLE_MS;
+}
+function staleWord(ms){
+  if(ms == null) return "疑似卡住";
+  var h = Math.round(ms/3600000);
+  if(h >= 48) return "疑似卡住 · "+Math.round(h/24)+" 天无新事件";
+  if(h >= 1) return "疑似卡住 · "+h+" 小时无新事件";
+  return "疑似卡住 · "+Math.max(1, Math.round(ms/60000))+" 分钟无新事件";
+}
+var staleToasted = {};
+function toastStaleOnce(r){
+  if(!r || staleToasted[r.id]) return;
+  staleToasted[r.id] = 1;
+  toast("「"+(r.title||r.id)+"」"+staleWord(r.idle_ms)+"（设置里可调）");
+}
 function fmtSec(ms){
   var s = Math.max(0, Math.round(ms/1000));
   if(s < 60) return s+"s";
@@ -1549,6 +1634,8 @@ function runningStep(r){
 }
 function statusLineHtml(r){
   var a = aggOf(r);
+  if(isStale(r)) return '<div class="wait stale"><span class="sh"></span><span class="wk">'+esc(staleWord(r.idle_ms))+'</span>'+
+    '<button class="wk-btn" id="staleRetry">重试</button><button class="wk-btn" id="staleAbort">中止</button></div>';
   if(a==="working"){
     var st = runningStep(r);
     if(st){
@@ -1586,6 +1673,7 @@ function setStatusWord(r){
   var a = aggOf(r);
   el.hidden = false;
   el.dataset.s = a;
+  if(isStale(r)){ el.dataset.s = "stale"; tx.textContent = "疑似卡住"; toastStaleOnce(r); return; }
   tx.textContent = (a==="blocked" && r.agg_n > 1) ? (AGG_LABEL[a]+" · "+r.agg_n) : (AGG_LABEL[a] || "");
 }
 var TURN_LABEL = {completed:"已完成","max-tokens":"被 token 上限截断",interrupted:"中断",cancelled:"已中止",failed:"失败",running:"进行中"};
@@ -1864,7 +1952,9 @@ function gateCardHtml(c){
   var h = '<article class="incard" id="'+esc(c.id)+'">';
   if(c.crumb) h += '<div class="icrumb">'+(c.crumb||[]).map(function(x,i){return (i?'<i>›</i>':'')+(i===c.crumb.length-1?'<b>'+esc(x)+'</b>':esc(x));}).join("")+'</div>';
   h += '<h3>'+esc(c.t)+'</h3>';
-  h += '<p class="desc">'+(c.d||"")+'</p>';   /* d：本地桥受信 HTML（含 <code>） */
+  /* R5-02：描述只在"比标题多说了一句"时渲染（单行问题不再重复） */
+  var _d = String(c.d||""), _p = _d.replace(/<[^>]*>/g,"").trim();
+  if(_d && _p && _p !== String(c.t||"").trim()) h += '<p class="desc">'+_d+'</p>';
   h += '<div class="opts">'+(c.opts||[]).map(function(o){
     var kind = {"danger":1,"solid":1}[o[1]] ? o[1] : "";
     return '<button class="opt '+kind+'" data-v="'+esc(o[2])+'" data-l="'+esc(o[0])+'">'+esc(o[0])+'</button>';
@@ -1900,7 +1990,7 @@ function approvalCardHtml(c){
   if(cmd) h += '<pre class="cmd">'+esc(cmd)+'</pre>';
   h += '<p class="why">'+esc(a.reason||"")+'</p>';
   h += '<div class="opts">'+(a.opts||[]).map(function(o,i){
-    var kind = o.decision === "rejected" ? "danger" : (o.scope ? "solid" : "");
+    var kind = o.kind || (o.decision === "rejected" ? "danger" : (o.decision === "allowed-once" ? "solid" : ""));
     return '<button class="opt '+kind+'" data-i="'+i+'" data-d="'+esc(o.decision)+'" data-l="'+esc(o.label)+'"'+
            (o.hint?' title="'+esc(o.hint)+'"':'')+'>'+esc(o.label)+'</button>';
   }).join("")+'</div>';
@@ -2360,29 +2450,38 @@ function focusFirstApproval(){
   return true;
 }
 function palActions(){
+  /* R5-03：动作置顶并分组（键盘用户的直达入口）；任务在后，徽标走中文 AGG_LABEL */
   var acts = [];
+  function A(label, sub, go){ acts.push({ g:"动作", label:label, sub:sub, go:go }); }
+  A("信息密度：切换详细 / 紧凑（当前："+(VERB==="compact"?"紧凑":"详细")+"）", "V", function(){ var b=$("#vbBtn"); if(b) b.click(); });
+  A("打开首个待裁决项", "A", function(){ if(!focusFirstApproval()) toast("当前没有待裁决项"); });
+  A("右栏：提案页签", "R3", function(){ switchPane("props"); });
+  A("右栏：子代理页签", "R3", function(){ switchPane("subs"); renderSubs(subsNd); });
+  A("右栏：Git 页签", "R5", function(){ switchPane("git"); });
+  A("派发新任务（聚焦输入框）", "/", function(){ var c=$("#cText"); if(c) c.focus(); });
+  A("健康检查 / 诊断包", "D", function(){ openHealth($("#palBtn")); });
+  A("设置", ",", function(){ if(typeof openSettings === "function") openSettings(); });
   RUNS.forEach(function(r,i){
-    acts.push({ label:"打开任务："+(r.title||r.id), sub:(r.agg||r.status||""), go:function(){ selectRun(i); } });
+    acts.push({ g:"任务", label:"打开任务："+(r.title||r.id), sub:(AGG_LABEL[aggOf(r)]||aggOf(r)), go:function(){ selectRun(i); } });
   });
-  acts.push({ label:"信息密度：切换详细 / 紧凑（当前："+(VERB==="compact"?"紧凑":"详细")+"）", sub:"V", go:function(){ var b=$("#vbBtn"); if(b) b.click(); } });
-  acts.push({ label:"打开首个待裁决项", sub:"A", go:function(){ if(!focusFirstApproval()) toast("当前没有待裁决项"); } });
-  acts.push({ label:"右栏：提案页签", sub:"R3", go:function(){ switchPane("props"); } });
-  acts.push({ label:"右栏：子代理页签", sub:"R3", go:function(){ switchPane("subs"); renderSubs(subsNd); } });
-  acts.push({ label:"派发新任务（聚焦输入框）", sub:"/", go:function(){ var c=$("#cText"); if(c) c.focus(); } });
-  acts.push({ label:"健康检查 / 诊断包", sub:"D", go:function(){ openHealth($("#palBtn")); } });
   return acts;
 }
 function renderPalette(q){
+  var qqRaw = String(q||"").trim();
+  var onlyActs = qqRaw.charAt(0) === ">";                 /* R5-03：'>' 前缀只搜动作 */
+  if(onlyActs) qqRaw = qqRaw.slice(1).trim();
   var all = palActions();
-  var qq = String(q||"").trim().toLowerCase();
+  if(onlyActs) all = all.filter(function(it){ return it.g === "动作"; });
+  var qq = qqRaw.toLowerCase();
   palItems = qq ? all.filter(function(it){ return (it.label+" "+(it.sub||"")).toLowerCase().indexOf(qq) >= 0; }) : all;
   if(palSel >= palItems.length) palSel = Math.max(0, palItems.length-1);
   var list = $("#palList"); if(!list) return;
-  list.innerHTML = palItems.length
-    ? palItems.map(function(it,i){
-        return '<div class="pal-it'+(i===palSel?" sel":"")+'" data-i="'+i+'"><span>'+esc(it.label)+'</span>'+(it.sub?'<span class="k">'+esc(it.sub)+'</span>':"")+'</div>';
-      }).join("")
-    : '<div class="pal-it">没有匹配的命令</div>';
+  var h = "", grp = "";
+  palItems.forEach(function(it,i){
+    if(it.g !== grp){ grp = it.g; h += '<div class="pal-g">'+esc(grp)+'</div>'; }
+    h += '<div class="pal-it'+(i===palSel?" sel":"")+'" data-i="'+i+'"><span>'+esc(it.label)+'</span>'+(it.sub?'<span class="k">'+esc(it.sub)+'</span>':"")+'</div>';
+  });
+  list.innerHTML = h || '<div class="pal-it">没有匹配的命令</div>';
   each("#palList .pal-it", function(el){
     el.addEventListener("click", function(){ var i = +el.dataset.i; if(!isNaN(i)) runPalItem(palItems[i]); });
   });
@@ -2497,6 +2596,13 @@ function bindChrome(){
   var nsw = $("#setNotify");
   if(nsw){ nsw.checked = NOTIFY_ON; nsw.addEventListener("change", function(){ setNotifyOn(this.checked); }); }
   paintNotifyNote();
+  renderIdleSeg();
+  document.addEventListener("click", function(e){
+    var el = e.target && e.target.id ? e.target : null; if(!el) return;
+    var r = RUNS[currentRun]; if(!r || !r.id) return;
+    if(el.id === "staleRetry"){ fetch("/api/runs/"+encodeURIComponent(r.id)+"/node/root/retry", {method:"POST"}).then(scheduleFetch); }
+    if(el.id === "staleAbort"){ fetch("/api/runs/"+encodeURIComponent(r.id)+"/node/root/abort", {method:"POST"}).then(scheduleFetch); }
+  });
   bindDelivUi();
 }
 /* ================= R3：子代理页签的行（path / 状态点 / 目标 / 耗时） ================= */
@@ -2656,6 +2762,16 @@ function closeSettings(){
   var el = $("#settings"); if(!el || el.hidden) return;
   el.hidden = true;                       /* 关层不保存：开关本身是改完即提交，没有待存的草稿 */
   try{ var b = $("#setBtn"); if(b) b.focus(); }catch(e){}
+}
+var IDLE_CHOICES = [[30000,"30 秒"],[120000,"2 分钟"],[600000,"10 分钟"],[1800000,"30 分钟"]];
+function renderIdleSeg(){
+  var host = $("#idleSeg"); if(!host) return;
+  host.innerHTML = IDLE_CHOICES.map(function(c){
+    return '<button class="idleb'+(IDLE_MS===c[0]?" on":"")+'" data-ms="'+c[0]+'">'+c[1]+'</button>';
+  }).join("");
+  each("#idleSeg .idleb", function(el){
+    el.addEventListener("click", function(){ setIdleMs(+el.dataset.ms); });
+  });
 }
 function renderSettings(){
   var sw = $("#setAutoLow"), note = $("#setAutoNote");
@@ -3012,6 +3128,13 @@ else bindChrome();
         </label>
       </div>
       <div class="set-note" id="setNotifyNote"></div>
+
+      <div class="set-sec">僵尸「进行中」判定</div>
+      <div class="set-row2">
+        <div class="set-txt"><b>多久没动静算卡住</b>
+          <span class="set-sub">最近事件/心跳超过这个时长 → 状态改「疑似卡住」；等你回答不算</span></div>
+        <div class="idle-seg" id="idleSeg"></div>
+      </div>
 
       <div class="set-sec">并发上限</div>
       <div class="set-kv"><span>run.json.parallel</span><b id="setPar">—</b></div>

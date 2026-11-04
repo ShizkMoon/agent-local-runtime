@@ -22,6 +22,9 @@
    导致原坐标不可见时，MyGo 会夹到主屏工作区并居中，不会把窗口丢到屏幕外。
 7. 全局热键 `Ctrl+Alt+A` 显隐窗口；拖文件进窗口会在 composer 插入 `@绝对路径`；
    磁盘代码比运行中的桥新时，窗口底部弹一次「代码已更新，重启生效」。
+8. 托盘红点跟随 `/api/approvals` 的待裁决数（30s 轮询 + 窗口聚焦即时刷新）；
+   `Ctrl+/` 打开快捷键速查；壳自己拉起的桥崩了会按 1s/2s/4s 退避重启，
+   3 次失败落到本地错误页（重试 / 打开日志）。
 
 壳自己的日志落 `<AICA_STATE>\workbench-shell.log`（GUI 子系统没有 stderr，
 启动失败只能从这里查；超过 1MB 自动清空重写）。
@@ -64,6 +67,10 @@
   `<AICA_STATE>\tray-hint-shown` 保证只提示一次；
 - MyGo 托盘只收 PNG 字节，所以运行时用 `resources/icon.png`（`go:embed` 内嵌）；
   `resources/icon.ico` 继续给 `mygo.json` 打包 exe 图标用。
+- **红点徽标**：`GET /api/approvals` 的 `count` > 0 时切换到运行时生成的
+  「右上角红点」PNG，tooltip 变「AICA 工作台 · 待你 N」；归零切回原图。
+  轮询 30s，窗口 `OnShow/OnFocus`、热键唤出、桥重启成功都会立即刷一次；
+  切图标只在数量变化时做（`badge.go`）。
 
 ### 全局热键 `Ctrl+Alt+A`
 
@@ -88,6 +95,29 @@
    逻辑能感知；
 4. 页面将来若自己处理 DOM `drop`，置 `window.__aicaHandlesDrop = true` 即可让
    preload 不再重复插入（也可直接调 `window.__aicaInsertPaths(paths)`）。
+
+### Ctrl+/ 快捷键面板
+
+preload 注入，不改 `public/v1/index.html`：`Ctrl+/`（含 `?`，兼容不同键盘布局）
+打开居中 overlay，列出 Ctrl+K 命令面板、Ctrl+, 设置、Ctrl+/ 本面板、J/K 切任务、
+A 批准、R 拒绝、/ 聚焦、Esc 关层、Ctrl+Alt+A 全局唤出；`Esc` 或再按一次关闭。
+面板用静态 HTML 生成，不读页面状态、不拦截其他按键。
+
+### 桥崩溃自愈
+
+只监控**壳自己 spawn 的** node（复用别人已在跑的桥时没有子进程可等，README 前提里
+说明）。`superviseBridge` 阻塞在 `cmd.Wait()`：
+
+1. 进程退出且不是退出流程 → 按 **1s → 2s → 4s** 退避最多重启 3 次，
+   每次 `startServer` + `waitReady(15s)`；失败会先 `stopServer` 清掉半死进程；
+2. 重启成功 → `Page.LoadURL(viewURL)` 刷新 WebView2，并立即刷新托盘徽标；
+3. 3 次都失败 → 本地错误页（`127.0.0.1` 随机端口，`bridge.go`）：
+   展示最近错误与两份日志路径，按钮「重试」（再走 3 次退避）「打开日志」
+   （`Shell.OpenPath` 打开 `workbench-shell.log`）。错误页只在 loopback 提供服务，
+   `OnWillNavigate` 把它加入白名单。
+
+日志关键字（`workbench-shell.log`）：`桥进程退出`、`桥重启 n/3`、`桥重启成功`、
+`桥自愈失败`、`错误页服务: http://127.0.0.1:<port>/`。
 
 ### 更新提示（静默不重启）
 
