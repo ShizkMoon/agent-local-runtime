@@ -1,8 +1,8 @@
 // ar daemon：用户会话常驻宿主，消费派发意图、拉起与回收 Worker 进程
 // 会话边界原因：Session 0 服务碰不到桌面，agent-desktop/ego 只能在交互会话工作
 import { spawn, execFileSync } from "node:child_process";
-import { appendFileSync, existsSync, readFileSync, mkdirSync, copyFileSync, writeFileSync, unlinkSync } from "node:fs";
-import { join } from "node:path";
+import { appendFileSync, existsSync, readFileSync, mkdirSync, copyFileSync, writeFileSync, unlinkSync, statSync } from "node:fs";
+import { join, dirname, isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
 import { pendingNodes, appendEvent, readResult, writeResult, patchResult, writeSpec, writeWorker, clearWorker, abortWorker, nodeDir, RUNS_DIR, STATE, DEFAULT_PARALLEL, writeCheckpoint, readCheckpoint, lastSeq, closeDanglingTools } from "./runs.ts";
 import { tapStdout, readUsage, usageTokens, type UsageLedger, type UsageTurn } from "./transcribe.ts";
@@ -29,6 +29,8 @@ const DEFAULT_PI_TOOLS = [
 ];
 // S11 reviewer 默认面：只读核证（不写不派；ev_gate 保留提问通道）。用字面量不用 PROTOCOL_TOOLS 展开——ev_wait/ev_todo 不授给 reviewer
 const REVIEWER_PI_TOOLS = ["read", "ls", "find", "grep", "ar_read", "ev_done", "ev_fail", "ev_gate"];
+// R3 D5 plan mode：只读规划面（不改文件、不跑命令、不派子节点）；spec.tools 也不放开——plan 档恒只读，防自我提权
+export const PLAN_PI_TOOLS = ["read", "ls", "find", "grep", "ar_read", "ev_gate", "ev_done", "ev_fail"];
 
 // S13 角色模型路由：aica-pi/roles.json{worker,orchestrator,reviewer,advisor,fallback[]}
 // 值给 null/缺省 = 该角色不指定模型，继续走 env/内置默认
@@ -39,7 +41,8 @@ function rolesCfg(): RolesCfg {
 }
 /** 模型解析序：spec.model ?? roles[profile] ?? AICA_PI_MODEL ?? 内置默认 */
 function modelFor(spec: SpecEnvelope): string {
-  const role = (spec.profile ?? "worker") as keyof RolesCfg;
+  // R3：plan 档没有专属 roles 条目，沿用 worker 的模型选择（只换工具面与 prompt）
+  const role = (spec.profile === "plan" ? "worker" : spec.profile ?? "worker") as keyof RolesCfg;
   const roles = rolesCfg();
   return spec.model ?? (typeof roles[role] === "string" ? (roles[role] as string) : undefined)
     ?? process.env.AICA_PI_MODEL ?? DEFAULT_PI_MODEL;
@@ -74,8 +77,10 @@ function resolvePiCli(): string {
   throw new Error(`pi-coding-agent bundle cli.js not found (tried ${candidates.join(", ")}); set AICA_PI_CLI`);
 }
 
-/** 节点工具面：spec.tools 为授予全集 + 协议工具；reviewer 缺省只读面；其余给内置执行面 + 只读环工具（不授 ar_dispatch/桌面/浏览器） */
-function toolAllowlist(spec: SpecEnvelope): string[] {
+/** 节点工具面：spec.tools 为授予全集 + 协议工具；reviewer 缺省只读面；plan 恒只读；其余给内置执行面 + 只读环工具（不授 ar_dispatch/桌面/浏览器） */
+export function toolAllowlist(spec: SpecEnvelope): string[] {
+  // R3 D5：plan 档先于 spec.tools —— 只读规划不能被 spec 里的写工具或 bash 提权；工具面就是这 8 个
+  if (spec.profile === "plan") return [...PLAN_PI_TOOLS];
   if (spec.tools?.length) return [...new Set([...spec.tools, ...PROTOCOL_TOOLS])];
   if (spec.profile === "reviewer") return REVIEWER_PI_TOOLS;
   return DEFAULT_PI_TOOLS;
@@ -84,8 +89,70 @@ function toolAllowlist(spec: SpecEnvelope): string[] {
 // S12 learn 注入上限：userMessage 尾段只带 learned.md 前 2000 字（防前缀膨胀）
 const LEARNED_INJECT_CAP = 2000;
 
-/** user message = 变量部分（worker.md 规则走 --append-system-prompt 保证前缀稳定可缓存）；resumed = waiting 回复后恢复拉起 */
-function userMessage(spec: SpecEnvelope, resumed = false): string {
+// R3 B3：@file 引用 —— 单文件 ≤8KB、总量 ≤32KB；缺失注入 [缺失] 标记并交给调用方记 input 事件（不阻塞拉起）
+export const AT_REF_FILE_CAP = 8 * 1024;
+export const AT_REF_TOTAL_CAP = 32 * 1024;
+export interface AtRef { ref: string; ok: boolean; bytes: number; truncated?: boolean; denied?: string }
+
+/** @file 守门：.git 与运行时 STATE 不进 prompt（@ 是绕过 gate 的直接读，控制面/别的节点的 gate/result 不能这样泄漏） */
+function atRefDenied(abs: string): string | null {
+  const norm = abs.replace(/\\/g, "/").toLowerCase();
+  if (/(^|\/)\.git(\/|$)/.test(norm)) return ".git 目录";
+  const state = String(STATE ?? "").replace(/\\/g, "/").toLowerCase();
+  if (state && (norm === state || norm.startsWith(state + "/"))) return "运行时状态目录";
+  return null;
+}
+
+/** 从 goal 里抽 @path：行首/空白后起头，遇到空白或中英文标点结束；同一条只注入一次 */
+export function expandAtRefs(goal: string, baseDir: string, onMissing?: (ref: string, reason?: string) => void): { text: string; refs: AtRef[] } {
+  const refs: AtRef[] = [];
+  const blocks: string[] = [];
+  const seen = new Set<string>();
+  let budget = AT_REF_TOTAL_CAP;
+  for (const m of String(goal ?? "").matchAll(/(^|[\s(（])@([^\s]+)/g)) {
+    const ref = m[2].replace(/[)\]）】,.;:!?，。；：！？]+$/g, "");
+    if (!ref || seen.has(ref)) continue;
+    seen.add(ref);
+    const abs = isAbsolute(ref) ? ref : join(baseDir, ref);
+    const denied = atRefDenied(abs);
+    if (denied) {
+      refs.push({ ref, ok: false, bytes: 0, denied });
+      blocks.push(`- [拒绝] ${ref}（${denied}：@ 不读控制面）`);
+      onMissing?.(ref, denied);
+      continue;
+    }
+    let buf: Buffer | null = null;
+    try { if (existsSync(abs) && statSync(abs).isFile()) buf = readFileSync(abs); }
+    catch { buf = null; }
+    if (!buf) {
+      refs.push({ ref, ok: false, bytes: 0 });
+      blocks.push(`- [缺失] ${ref}`);
+      onMissing?.(ref, "文件不存在");
+      continue;
+    }
+    if (budget <= 0) {
+      refs.push({ ref, ok: true, bytes: 0, truncated: true });
+      blocks.push(`### ${ref}\n\n…[超出注入总量上限（${AT_REF_TOTAL_CAP} 字节），未注入]`);
+      continue;
+    }
+    const take = buf.subarray(0, Math.min(AT_REF_FILE_CAP, budget));
+    const truncated = take.length < buf.length;
+    budget = Math.max(0, budget - take.length);
+    refs.push({ ref, ok: true, bytes: take.length, ...(truncated ? { truncated } : {}) });
+    blocks.push(`### ${ref}\n\n\`\`\`\n${take.toString("utf8")}${truncated ? "\n…[已截断：超出注入上限]" : ""}\n\`\`\``);
+  }
+  if (!refs.length) return { text: "", refs };
+  return { text: ["## 引用文件", ...blocks].join("\n\n"), refs };
+}
+
+/** user message = 变量部分（worker.md 规则走 --append-system-prompt 保证前缀稳定可缓存）；resumed = waiting 回复后恢复拉起
+ *  R3：baseDir 用于解析 @file（节点目录，= worker cwd）；onMissingAtRef 让调用方记 input 事件 */
+export function userMessage(
+  spec: SpecEnvelope,
+  resumed = false,
+  baseDir = process.cwd(),
+  onMissingAtRef?: (ref: string, reason?: string) => void,
+): string {
   const lines = [spec.goal, "", "## 节点上下文"];
   lines.push(`- node_id: ${spec.id}`);
   if (spec.accept?.length) lines.push("- accept:", ...spec.accept.map((a) => `  - ${a}`));
@@ -94,6 +161,19 @@ function userMessage(spec: SpecEnvelope, resumed = false): string {
   if (spec.budget?.depth_left !== undefined) lines.push(`- depth_left: ${spec.budget.depth_left}`);
   lines.push("- artifacts 目录: artifacts/（相对当前工作目录；大输出落盘回 ref）");
   lines.push("- 结束时必须调用 ev_done（成功）或 ev_fail（失败），否则按退出码兜底");
+  // R3 B3：@file 引用（内容照原样注入，worker 当资料不当指令）
+  const at = expandAtRefs(spec.goal ?? "", baseDir, onMissingAtRef);
+  if (at.text) lines.push("", at.text);
+  // R3 D5：plan 档的产出契约（prompt 里讲方法，这里钉死落盘位置与回传字段）
+  if (spec.profile === "plan") {
+    lines.push(
+      "",
+      "## 计划模式（只读）",
+      "- 你只有只读工具（read/ls/find/grep/ar_read）；不要尝试改文件、跑命令、派子节点。",
+      "- 产出写到 artifacts/plan.md，再用 ev_done 把同一份计划作为 summary 回传（两边内容一致）。",
+      "- 计划必须四段：目标拆解 / 每步验收 / 风险 / 需要人批的点。",
+    );
+  }
   if (spec.reply?.length) {
     lines.push("", "## 人工回复");
     for (const r of spec.reply) lines.push(`- [${r.ts}] ${r.text}`);
@@ -150,14 +230,20 @@ function materializeInputs(rootId: string, path: string, spec: SpecEnvelope): Sp
   return { ...spec, inputs };
 }
 
-/** Worker 拉起命令：按 spec.agent 选 launcher。dir = 节点目录（session 挂其下，恢复拉起继承上下文） */
-function launcher(spec: SpecEnvelope, resumed = false, dir?: string): { file: string; args: string[]; desc: string } {
+/** Worker 拉起命令：按 spec.agent 选 launcher。dir = 节点目录（session 挂其下，恢复拉起继承上下文；@file 也相对它解析）
+ *  onMissingAtRef：goal 里 @ 到的文件不存在时的回调（daemon 用它记 input 事件） */
+export function launcher(
+  spec: SpecEnvelope,
+  resumed = false,
+  dir?: string,
+  onMissingAtRef?: (ref: string, reason?: string) => void,
+): { file: string; args: string[]; desc: string } {
   const agent = spec.agent ?? "pi";
   switch (agent) {
     case "pi": {
       const cli = resolvePiCli();
-      // S11 profile→prompt 映射：reviewer 用 reviewer.md；advisor 暂无专属 prompt 回落 worker.md
-      const profile = spec.profile === "orchestrator" || spec.profile === "reviewer" ? spec.profile : "worker";
+      // S11 profile→prompt 映射：reviewer/orchestrator 用专属 prompt；R3 D5 新增 plan；其余回落 worker
+      const profile = spec.profile === "orchestrator" || spec.profile === "reviewer" || spec.profile === "plan" ? spec.profile : "worker";
       const model = modelFor(spec);
       const args = [
         cli,
@@ -174,7 +260,7 @@ function launcher(spec: SpecEnvelope, resumed = false, dir?: string): { file: st
         "-e", join(AICA_PI, "extensions", "gate.ts"),
         // S14 skills 显式挂载：--no-skills 下 --skill <path> 仍会加载（pi cli.md:202）
         ...(spec.skills ?? []).flatMap((s) => ["--skill", join(AICA_PI, "skills", String(s))]),
-        "--", userMessage(spec, resumed),
+        "--", userMessage(spec, resumed, dir ?? process.cwd(), onMissingAtRef),
       ];
       return { file: process.execPath, args, desc: `node ${cli} -p ... [${agent}/${profile} ${model}]` };
     }
@@ -214,7 +300,7 @@ function notifyLog(rootId: string, path: string, spec: SpecEnvelope): void {
 /** S15 hooks 骨架（G37）：节点落定后跑 <aica-pi>/hooks/node_settled.mjs —— 只认 aica-pi 包内目录。
  *  契约：node <hook> <node_dir>，stdin 喂 {spec,result}，5s 超时；
  *  stdout JSON 若有 dispatch:[{path,goal,agent?,profile?,accept?}] → 逐个 writeSpec（parent=本节点 id） */
-function runNodeSettledHook(rootId: string, path: string, spec: SpecEnvelope): void {
+export function runNodeSettledHook(rootId: string, path: string, spec: SpecEnvelope): void {
   const hook = join(AICA_PI, "hooks", "node_settled.mjs");
   if (!existsSync(hook)) return;
   const dir = nodeDir(rootId, path);
@@ -229,9 +315,11 @@ function runNodeSettledHook(rootId: string, path: string, spec: SpecEnvelope): v
     appendEvent(rootId, path, { kind: "hook", data: { hook: "node_settled", error: String(e).slice(0, 300) } });
     return;
   }
-  let parsed: { dispatch?: { path?: unknown; goal?: unknown; agent?: unknown; profile?: unknown; accept?: unknown }[] };
+  let parsed: { dispatch?: { path?: unknown; goal?: unknown; agent?: unknown; profile?: unknown; accept?: unknown }[]; proposal?: Record<string, unknown> };
   try { parsed = JSON.parse(out.trim() || "{}"); }
   catch { appendEvent(rootId, path, { kind: "hook", data: { hook: "node_settled", error: "stdout 非 JSON", out: out.slice(0, 300) } }); return; }
+  // R3 §9.5：hook 登记的提案 —— 事件是 inbox 类目/时间线的数据源（不新造通知通道）
+  if (parsed?.proposal) appendEvent(rootId, path, { kind: "proposal", data: parsed.proposal });
   const disp = Array.isArray(parsed?.dispatch) ? parsed.dispatch : [];
   if (disp.length) appendEvent(rootId, path, { kind: "hook", data: { hook: "node_settled", dispatch: disp.length } });
   for (const d of disp) {
@@ -253,6 +341,21 @@ function runNodeSettledHook(rootId: string, path: string, spec: SpecEnvelope): v
       appendEvent(rootId, path, { kind: "hook", data: { hook: "node_settled", dispatch_error: String(e).slice(0, 200) } });
     }
   }
+}
+
+/** R3 D5：plan 节点收尾时保证 artifacts/plan.md 存在——worker 没写就用 result.summary 兜底（两边内容一致） */
+export function finalizePlanArtifact(rootId: string, path: string, spec: SpecEnvelope): void {
+  if (spec.profile !== "plan") return;
+  try {
+    const r = readResult(rootId, path);
+    if (!r || r.status !== "done") return;
+    const body = String(r.summary ?? "").trim();
+    if (!body) return;
+    const f = join(nodeDir(rootId, path), "artifacts", "plan.md");
+    if (existsSync(f)) return;
+    mkdirSync(dirname(f), { recursive: true });
+    writeFileSync(f, body + "\n", "utf8");
+  } catch { /* 兜底失败不阻塞收尾 */ }
 }
 
 // S20：tokens 预算 —— 在 turn 边界判定（usage.json 刚落账时），超限即中止并留下证据。
@@ -287,7 +390,10 @@ function spawnWorker(rootId: string, path: string, spec: SpecEnvelope, resumed =
   const mspec = materializeInputs(rootId, path, spec);   // S14：art:// 先物化，userMessage 见 inputs/<file>
   let file: string, args: string[], desc: string;
   try {
-    ({ file, args, desc } = launcher(mspec, resumed, dir));
+    ({ file, args, desc } = launcher(mspec, resumed, dir, (ref, reason) => {
+      // R3 B3：@file 缺失/被拒继续拉起（复用 S14 skip 语义），但留 input 事件作证据
+      appendEvent(rootId, path, { kind: "input", data: { ref, skipped: reason ?? "@file 不可用（已注入标记）" } });
+    }));
   } catch (e) {
     running.delete(spec.id);
     appendEvent(rootId, path, { kind: "exit", data: { code: -1, error: `launcher: ${String(e)}` } });
@@ -332,6 +438,7 @@ function spawnWorker(rootId: string, path: string, spec: SpecEnvelope, resumed =
           : `Worker 异常退出（code ${code}）${err ? `：${String(err)}` : ""}——详见节点 events.jsonl`,
       });
     }
+    finalizePlanArtifact(rootId, path, spec);  // R3 D5：plan 文本兜底落 artifacts/plan.md
     notifyLog(rootId, path, spec);            // S13：一行通知供外部 watcher
     runNodeSettledHook(rootId, path, spec);   // S15：节点落定 hook（可派后续 spec）
   };

@@ -449,6 +449,8 @@ export function controlPlaneHit(candidates: string[], cwd = process.cwd()): stri
     let abs: string;
     try { abs = resolvePath(cwd, expandVars(cand, cwd)); } catch { continue; }
     const key = criticalKey(abs, cwd);
+    // 节点目录本身上下都是数据面（worker 的 cwd；`ls .`/`ls <node>` 不该被当成控制面）
+    if (nodeKey && key === nodeKey) continue;
     // 节点目录里的已知控制文件（spec/result/worker/gate*/grants/loop/usage/checkpoint/perm-*）算控制面；
     // 其余（artifacts/、session/、dist/、任意工作文件）是数据面 —— worker 天天写，不该每次弹窗。
     if (nodeKey && key.startsWith(nodeKey + "\\")) {

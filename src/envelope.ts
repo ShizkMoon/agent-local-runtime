@@ -21,7 +21,7 @@ export interface SpecEnvelope {
   plan_version?: number;
   type: "assign" | "expand";
   agent?: AgentKind;      // Worker 类型，默认 "pi"
-  profile?: "worker" | "orchestrator" | "reviewer" | "advisor";  // reviewer/advisor=S11 角色槽（prompt/工具面/模型各配）
+  profile?: "worker" | "orchestrator" | "reviewer" | "advisor" | "plan";  // reviewer/advisor=S11 角色槽；plan=R3 D5 只读规划档
   model?: string;         // 模型 ID（如 "opencode-pool/deepseek-v4.1-flash"），缺省走 AICA_PI_MODEL/内置默认
   mode?: { shape: NodeMode; axis?: string; n?: number; stop_when?: string; why?: string };
   goal: string;           // 节点目标（渲染进 worker 上下文）
@@ -56,6 +56,9 @@ export interface ResultEnvelope {
   children?: { kind: string; subject: string }[];  // 仅 status=split
   spent?: { tokens?: number; minutes?: number };
   wait_on?: string[];     // status=waiting 时挂起等待的子节点 path 列表（S7 join 原语）
+  /** R3 §9.5：本节点产出的自进化提案（slug 或 proposals/<slug> 目录路径）。
+   *  node_settled hook 读到它 → 登记 <STATE>/proposals/index.jsonl + 节点写 learn 事件；缺省行为不变。 */
+  proposal?: string;
   output?: unknown;       // 结构化回传（G21 预留，R2 才加 schema 校验）
   finished_at: string;
 }
