@@ -1,10 +1,11 @@
 // ar daemon：用户会话常驻宿主，消费派发意图、拉起与回收 Worker 进程
 // 会话边界原因：Session 0 服务碰不到桌面，agent-desktop/ego 只能在交互会话工作
 import { spawn, execFileSync } from "node:child_process";
-import { appendFileSync, existsSync, openSync, writeFileSync, unlinkSync } from "node:fs";
+import { appendFileSync, existsSync, writeFileSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { pendingNodes, appendEvent, readResult, writeResult, RUNS_DIR, STATE } from "./runs.ts";
+import { tapStdout } from "./transcribe.ts";
 import type { SpecEnvelope } from "./envelope.ts";
 
 const POLL_MS = Number(process.env.AR_POLL_MS ?? 2000);
@@ -136,7 +137,6 @@ function spawnWorker(rootId: string, path: string, spec: SpecEnvelope, resumed =
     return;
   }
   appendEvent(rootId, path, { kind: "spawn", data: { cmd: desc, agent: spec.agent ?? "pi" } });
-  const log = openSync(join(dir, "stdout.log"), "a");
   let settled = false;
   const finish = (code: number | null, err?: unknown): void => {
     if (settled) return;
@@ -153,7 +153,8 @@ function spawnWorker(rootId: string, path: string, spec: SpecEnvelope, resumed =
     }
   };
   try {
-    const child = spawn(file, args, { cwd: dir, stdio: ["ignore", log, log], env: workerEnv(rootId, path), windowsHide: true });
+    const child = spawn(file, args, { cwd: dir, stdio: ["ignore", "pipe", "pipe"], env: workerEnv(rootId, path), windowsHide: true });
+    tapStdout(child, dir, rootId, path);   // stdout → stdout.log 全量 + events.jsonl 增量转写
     child.on("exit", (code) => finish(code));
     child.on("error", (e) => finish(-1, e));
   } catch (e) {

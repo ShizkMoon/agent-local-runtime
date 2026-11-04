@@ -82,6 +82,22 @@ export function appendEvent(rootId: string, path: string, rec: Omit<EventRecord,
   appendFileSync(join(nodeDir(rootId, path), "events.jsonl"), line + "\n", "utf8");
 }
 
+export interface UsageFile {
+  tokens: number;                        // 全部 turn 的 usage.totalTokens 累加
+  byTurn: { i: number; tokens: number }[];
+}
+
+/** G7 spent 聚合面：stdout 转写器在 turn_end 时按 message.usage.totalTokens 累加写 usage.json */
+export function addUsage(rootId: string, path: string, turn: number, tokens: number): void {
+  const file = join(nodeDir(rootId, path), "usage.json");
+  let cur: UsageFile;
+  try { cur = readJson<UsageFile>(file) ?? { tokens: 0, byTurn: [] }; }
+  catch { cur = { tokens: 0, byTurn: [] }; }
+  cur.tokens += tokens;
+  cur.byTurn.push({ i: turn, tokens });
+  writeJson(file, cur);
+}
+
 /** ev_gate：节点目录写 gate.json（workbench inbox 投影读它），并记一条 gate 事件（尾事件 hint 即问题） */
 export function writeGate(rootId: string, path: string, gate: { question: string; opts?: string[] }): void {
   writeJson(join(nodeDir(rootId, path), "gate.json"), { ...gate, ts: new Date().toISOString() });

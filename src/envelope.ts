@@ -46,7 +46,9 @@ export interface ResultEnvelope {
 
 export interface EventRecord {
   ts: string;
-  kind: "tool_call" | "tool_execution" | "agent_message" | "file_edit" | "message" | "checkpoint" | "spawn" | "exit" | "gate";
+  // daemon 转写器追加 turn/turn_end/agent_end/_raw 及 pi 事件 type 透传，故放开为 string
+  kind: "tool_call" | "tool_execution" | "agent_message" | "file_edit" | "message" | "checkpoint" | "spawn" | "exit" | "gate"
+      | "turn" | "turn_end" | "agent_end" | "_raw" | (string & {});
   data: Record<string, unknown>;
 }
 
