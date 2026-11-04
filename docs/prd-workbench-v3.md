@@ -400,11 +400,11 @@ U07 行高阈值从 ≤28px 放宽到 ≤36px（单行不换行仍必须）；U2
 
 ---
 
-## 6. R2 执行计划（S16–S27）
+## 6. R2 执行计划（S16–S28）
 
 > **实施状态（2026-11-04）**：S16 ✅ S17 ✅（`c8ef2f5`）· S20 ✅（`7c083c0`）· S19 ✅（`62c1a77`）·
 > S21 ✅（`f71cab5`）· S25 ✅（`bdafb81`）。`node --test workbench/test` 74/74 全绿；真机已验工具时间线、
-> turn 结局行、审批卡三动作 + 500ms 防误批、预算拦截、孤儿节点归宿与 fork。待派：S18/S22/S23/S24/S26/S27。
+> turn 结局行、审批卡三动作 + 500ms 防误批、预算拦截、孤儿节点归宿与 fork。待派：S18/S22/S23/S24/S26/S27/S28。
 
 每个切片 = 一个可独立验收的改动；**所有切片默认由子代理执行，Lead 只审 diff + 跑验收**。
 
@@ -422,8 +422,9 @@ U07 行高阈值从 ≤28px 放宽到 ≤36px（单行不换行仍必须）；U2
 | S25 | 状态体系：视觉四态 + 文字六值 + 聚合取最紧急；等待态一行 shimmer；错误四色；分组与 verbosity 两档（详细/紧凑） | UI（+ SSE 重连逻辑、`view.ts` 分组） | 逐个制造并截图对照；切紧凑档只剩结论 + 每轮一行统计 | M15、P6、P8、P9、P14 |
 | S26 | 健康与审计面：`/api/health` + 诊断包 + `asked/decided` 配对投影 + 断线黄条与全量校准 | `server.ts`、`transcribe.ts`、UI | 断桥黄条出现并可导出；审计可点开 | M12、P16 |
 | S27 | 验收脚手架：e2e 夹具（录制回放 + 故障注入）、UI 断言、性能预算 | `workbench/test/` | `node --test workbench/test` 全绿 | 地基 |
+| S28 | 自进化流水线：`ev_propose` 提案目录 + `ar propose` 审阅/应用/回滚 + 路径白名单与 stale 保护（§9） | `aica-pi/extensions/tools.ts`、`src/proposals.ts`（新）、`src/cli.ts`、`server.ts` | low 提案落盘生效；high 需 `--force`；禁止级直接拒；verify 失败字节级回滚；第 4 次 apply 标 stale | §9 |
 
-**排期建议**：S16→S17 串行（同一文件），S18/S20/S23 可并行（都依赖 S16 的 view.ts），
+**排期建议**：S16→S17 串行（同一文件），S18/S20/S23 可并行（都依赖 S16 的 view.ts）；S28 与 S22 同动 `aica-pi/extensions/tools.ts`，必须同一个 owner 串行；
 S19/S24/S25 可并行（纯 UI），S21/S22 串行（都动 daemon），S26/S27 收尾。
 
 **R2 完成的定义**：§2 的"半"全部清零（9 条）；§3.3 的六道门可跑且全绿；§5.12 的 U01–U28 人工过一遍（不通过必须写原因）。
@@ -451,6 +452,66 @@ S19/S24/S25 可并行（纯 UI），S21/S22 串行（都动 daemon），S26/S27 
 | diff 回滚误伤用户文件 | 数据风险 | 只回滚本 run 写入且未被后续修改的文件；先备份 |
 | 子代理带来 token 成本失控 | 账单 | 并发上限 + 每 run 预算 + 超限拦截 |
 | UI 大改导致功能回退 | 体验倒退 | S16 先契约化，UI 改一层验一层 |
+
+---
+
+## 9. 自进化：Agent 改 Agent（S28）
+
+> 目标不是"能改"，而是"改了能证明变好、能回滚、不能自我提权"。七家里最接近的是
+> Claude Code 的 `ProposeSkills/ProposeGoal`（模型提议、人审落盘）、DSH 的 Agent Notes 与 hooks、
+> Cindy 的 MCP 网关（未披露即 fail-closed）。我们把它落成一条**文件化提案流水线**。
+
+### 9.1 提案即目录
+
+worker 通过新工具 `ev_propose` 产出 `runs/<root>/nodes/<path>/proposals/<slug>/`：
+
+```
+proposal.md     动机 / 预期效果 / 风险 / 影响的文件
+patch.diff      unified diff（只允许白名单路径）
+verify.json     {"cmd": "...", "timeout_ms": 180000}（默认 node --test workbench/test）
+meta.json       {"slug","created_at","base": {"file": sha256…}, "risk": "low|high"}
+```
+
+`ev_propose` 只写文件，不直接改仓库——**提案与生效分离**是这套机制的安全底座。
+
+### 9.2 路径白名单（可改 / 需人批 / 禁止）
+
+| 级别 | 路径 | 规则 |
+|---|---|---|
+| low | `aica-pi/skills/**`、`aica-pi/hooks/**`、`aica-pi/prompts/**`、`docs/**`、`workbench/public/**` | 可自动校验后由人一键应用 |
+| high | `src/**`、`aica-pi/extensions/**`、`workbench/server.ts`、`workbench/view.ts` | 标 `risk:high`，应用需二次确认 + 必须带 verify |
+| 禁止 | `workbench/shell/**`、`.git/**`、`aica-pi/extensions/gate.ts`（审批门本身）、`package.json` 的 scripts 字段 | 直接拒绝；防止自我提权与供应链改动 |
+
+白名单按**归一化后的相对路径**判定，`..`、绝对路径、符号链接一律拒绝。
+
+### 9.3 审阅面
+
+- CLI：`ar propose list` / `ar propose show <slug>` / `ar propose apply <slug> [--force]` / `ar propose reject <slug> --reason`。
+- API：`GET /api/proposals`、`POST /api/proposals/:slug/apply|reject`（S28 的 HTTP 面；UI 页签下一轮做）。
+- UI（后续）：右栏新增"提案"页签（diff + verify 结果 + 应用/拒绝），与审批卡共用动作语义（P10）。
+
+### 9.4 应用与回滚
+
+1. 把 `patch.diff` 应用到临时 worktree（`<state>/tmp/apply-<slug>/`，复制当前树）；
+2. 跑 `verify.cmd`，**全绿才算过**；
+3. 过 → 原子落盘（备份被改文件到 `proposals/<slug>/backup/`），写 `applied.json`（时间、verify 输出摘要、文件 sha256）；
+4. 不过 → 自动回滚，文件**字节级相同**（DSH 的"验证世界"：验收要证明世界变了，而不是模型说它变了）；
+5. 同一 slug 7 天内最多应用 3 次，超限标 `stale`，防"改不好就一直试"。
+
+### 9.5 与运行时的接口
+
+- `result.proposal` 存在 → `node_settled` hook 把提案挂进 inbox（走既有 gate 通道，不新造通知）；
+- 应用成功的提案写一条 `events.jsonl{kind:"learn"}` 到来源节点，下一轮 `learned.md` 注入时带上"上次这么改有效/无效"；
+- 所有应用动作都有 `approve_ask/approve_decide` 审计对（复用 S19 的账本）。
+
+### 9.6 验收（S28）
+
+1. `ar propose new/list/show/apply/reject` 全通，坏 patch 不崩；
+2. 应用一个只改 `aica-pi/skills/demo/SKILL.md` 的 low 提案：verify 通过 → 落盘 → 下一轮 worker 的 `--skill` 能看到；
+3. 应用一个改 `src/daemon.ts` 的提案：标 `risk:high`，无 `--force` 拒绝；
+4. 一个改 `workbench/shell/main.go` 的提案：直接拒绝（禁止级）；
+5. verify 失败 → 自动回滚，且被改文件 sha256 与之前一致；
+6. 同一 slug 第 4 次 apply 被拒（stale）。
 
 ---
 
