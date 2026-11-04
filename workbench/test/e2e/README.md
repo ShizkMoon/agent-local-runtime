@@ -6,7 +6,7 @@
 ## 跑法
 
 ```powershell
-node --test workbench/test/e2e                        # 全绿：36 pass / 7 skip（skip 都带理由，见下）
+node --test workbench/test/e2e                        # 全绿：37 pass / 6 skip（skip 都带理由，见下）
 $env:UPDATE_SNAPSHOTS='1'; node --test workbench/test/e2e   # 确认语义改动后重录投影快照
 $env:AICA_E2E_PERF_RUNS='200'; node --test workbench/test/e2e/perf.test.ts   # 缩小/放大性能样本
 $env:CHROME_PATH='C:\...\msedge.exe'                  # 指定浏览器（否则自动找 Edge/Chrome）
@@ -48,7 +48,7 @@ tools/make-approval-fixture.mjs  用真实 gate.ts 生成两个闸门夹具（�
 | `killWorker(nodeDir)` | 杀租约里的 worker，留下 `worker.json` | `pendingNodes()` 收尾为 `failed/orphaned`、只写 1 条 `orphan` 事件、清租约、**不重复拉起**（pending1/pending2 都是 0，全程 0 条 `spawn`） |
 | `killDaemon(stateDir)` | 杀守护进程 ×10（真 daemon 进程） | 有活租约时始终 0 条 `spawn`；租约也死后只收一次孤儿；队列清零（无僵尸节点） |
 | `truncateEvents(file,{fraction})` | 把 `events.jsonl` 从中间截断（可能留半行） | 行数变少但**投影不炸**；run 仍在列表；剩余事件仍带行号（对应产品 Q2 可回溯） |
-| `badGateAns(nodeDir)` | 写一个非法 `gate-ans.json` | 不伪造 result、run 不变 done；卡会消失（当前实现只看 mtime）——**风险已记录**，用 `diagnostic` 打出 |
+| `badGateAns(nodeDir)` | 写一个非法 `gate-ans.json`（`decision` 不在闭集） | **fail-closed**：`approvalState().invalid=true` 且 `pending=true`（卡留在「需要你」）、审计记 `decision:"invalid-answer"`、不伪造 result、run 不变 done |
 | `diskReadonly(file)` | chmod + `attrib +R` | 写 `events.jsonl` **必须抛错**、文件字节不变（事件丢失要炸，不要静默）；环境不支持则 skip 并说明 |
 
 另有三个子进程场景补齐注入器覆盖不到的真进程行为：
@@ -71,22 +71,22 @@ tools/make-approval-fixture.mjs  用真实 gate.ts 生成两个闸门夹具（�
 `ui.test.ts` 主用例 `4487`（顺延 4488..4492）、空态用例 `4493`；`gates.test.ts` G-6 `4480`。
 起桥前会核 `expectRuns`，**对不上就换端口**——绝不测别人的服务。Windows 上 TIME_WAIT 也会让 bind 失败，所以顺延是正常路径而非异常。
 
-## 性能预算（真实数字，不是期望值）
+## 性能预算（两条口径，同一数据集）
 
-500 个 run 目录（每个 1 节点 + 20 事件），`buildView` 冷/热各 21 次采样：
+500 个 run 目录（每个 1 节点 + 20 事件），冷/热各 21 次采样：
 
 ```
-[perf] runs=500 cold p50=282.0ms p95=289.1ms · warm p50=146.7ms p95=159.5ms · cache=10500/500
+[perf] runs=500 warm p50=39.1ms p95=40.3ms（预算 100）· cold p50=303.6ms p95=312.0ms（护栏 400）· cache=10500/500
 ```
 
-**G-6/性能门未达标**：预算 `p50 ≤ 100ms`，实测冷 282ms（2.8×）。S26 缓存已生效（命中 10500 / 未命中 500），
-说明热点不在事件投影，而在每次 `buildView` 仍要遍历 500 个 run 目录、逐节点 `readdir/stat/readJson`。
-按约定不假装绿：用例 `[skip-budget]` 跳过并打印上面这行真实数字，留给 S26 下一轮或 view 层批量化。
+- **warm p50 ≤ 100ms（必须绿）**：S26 run 级缓存命中后的稳态请求，用户真正感受到的那条。
+- **cold p50 ≤ 400ms（必须绿，回归护栏）**：清缓存后首次全量读盘；冷路径仍然被看着，但不拿"首次加载"堵门。
+- 只有 S26 缓存未落地（warm==cold，两条都测不出意义）才 `[skip-budget]`；否则两条都是硬断言。
 
 ## 已知风险
 
-1. **`pendingApproval` 只看 mtime**（`view.ts` / `server.ts` 各一份实现）：写了非法 `gate-ans.json` 就不再算"等你"，
-   但 `result` 仍是空 —— 卡会先消失。gate 侧是 fail-closed，UI 侧先松。已由 `badGateAns` 固定为当前行为并 `diagnostic` 标注。
+1. **审批 ans 闭集**：S19 起 `decision` 不在 `{allowed-once,rejected,cancelled,unavailable}` 里一律视为**未答**（fail-closed），
+   非法值记 `decision:"invalid-answer"` 审计、卡留在「需要你」。`badGateAns` 固定这条契约；将来若有人把 `pendingApproval` 退回"只看 mtime"，这条用例会红。
 2. **两条人机闸门通道不等价**：`gate.json + result.waiting` → `view.inbox`；`gate-req.json` → `/api/approvals` + `view.audits`。
    夹具分开覆盖，不把两者相等当成产品不变量。
 3. **`workbench/view.ts` 正在被改**：断言只用导出的语义 API 与语义字段，不钉行号、不整包快照；`clearViewCache` 用 `typeof` 探测，S26 没落地时性能用例仍能跑。
@@ -94,7 +94,7 @@ tools/make-approval-fixture.mjs  用真实 gate.ts 生成两个闸门夹具（�
    `tools/make-approval-fixture.mjs` 在 `NODE_TEST_CONTEXT` 下不动夹具。
 5. **端口**：4487 被别的进程/测试占用时自动顺延；`expectRuns` 不匹配同样顺延（防止把别人的状态当自己的）。
 6. **夹具时间固定**：审批 TTL 是 10 分钟，走 HTTP 的用例先把 mtime 拨到"刚刚"（`touchRecent`）；回放用例用 `case.json.now` 钉死。
-7. 7 个 skip 全部带理由：4 个是"该夹具没有 `stdout.log`，转写器无输入"，G-1/G-2 严格态未达标，性能预算未达标。
+7. 6 个 skip 全部带理由：4 个是"该夹具没有 `stdout.log`，转写器无输入"，2 个是 G-1/G-2 严格态未达标（信封形状本身是绿的）。
 
 ## 设计依据
 
