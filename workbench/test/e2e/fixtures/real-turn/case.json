@@ -1,0 +1,10 @@
+{
+  "nodePath": "root",
+  "case": "real-turn",
+  "kind": "assign",
+  "note": "真实 pi 跑的完整一轮（3 turn / 3 tool_execution / 1 artifact），取自 2026-11-04 s21 手工验收的 STATE",
+  "now": "2026-11-04T09:00:00.000Z",
+  "runId": "e9a3cf91-a19c",
+  "createdAt": "2026-11-04T08:12:21.726Z",
+  "subject": "List files in the current directory and call ev_done with one line"
+}

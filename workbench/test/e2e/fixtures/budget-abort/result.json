@@ -1,0 +1,12 @@
+{
+  "id": "node:c3749723-e556/root",
+  "finished_at": "2026-11-04T07:37:31.286Z",
+  "status": "failed",
+  "summary": "budget exceeded：已用 1915 / 上限 10 tokens（turn 边界中止）",
+  "type": "result",
+  "reason": "budget exceeded",
+  "spent": {
+    "tokens": 1915,
+    "minutes": 0
+  }
+}

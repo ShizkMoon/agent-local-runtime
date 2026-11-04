@@ -1,0 +1,19 @@
+{
+  "type": "assign",
+  "agent": "pi",
+  "goal": "Echo hello once and call ev_done with a one-line summary",
+  "inputs": [],
+  "accept": [
+    "one line summary"
+  ],
+  "budget": {
+    "tokens": 10,
+    "minutes": 3
+  },
+  "tools": [
+    "bash",
+    "ev_done",
+    "ev_fail"
+  ],
+  "id": "node:c3749723-e556/root"
+}

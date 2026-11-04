@@ -1,0 +1,10 @@
+{
+  "nodePath": "root",
+  "case": "budget-abort",
+  "kind": "assign",
+  "note": "真跑时把 budget.tokens 设成 10，第一个 turn 用掉 1915 → budget 事件 + abort + result.reason=budget exceeded（G-5 的真实证据）",
+  "now": "2026-11-04T08:00:00.000Z",
+  "runId": "c3749723-e556",
+  "createdAt": "2026-11-04T07:37:16.093Z",
+  "subject": "Echo hello once and call ev_done with a one-line summary"
+}

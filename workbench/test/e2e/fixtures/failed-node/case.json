@@ -1,0 +1,10 @@
+{
+  "nodePath": "root/summarize",
+  "case": "failed-node",
+  "kind": "meta.test",
+  "note": "子节点失败（read 未物化）——用于 turn 结局闭集与错误四色的回放",
+  "now": "2026-11-03T09:00:00.000Z",
+  "runId": "wb-fixture-demo1",
+  "createdAt": "2026-11-03T08:10:09.640Z",
+  "subject": "workbench 冒烟夹具"
+}

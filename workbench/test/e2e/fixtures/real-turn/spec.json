@@ -1,0 +1,19 @@
+{
+  "type": "assign",
+  "agent": "pi",
+  "goal": "List files in the current directory and call ev_done with one line",
+  "inputs": [],
+  "accept": [
+    "one line"
+  ],
+  "budget": {
+    "minutes": 5
+  },
+  "tools": [
+    "bash",
+    "read",
+    "ev_done",
+    "ev_fail"
+  ],
+  "id": "node:e9a3cf91-a19c/root"
+}

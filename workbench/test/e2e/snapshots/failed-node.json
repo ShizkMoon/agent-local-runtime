@@ -1,0 +1,97 @@
+{
+ "runs": [
+  {
+   "id": "wb-fixture-demo1",
+   "title": "workbench 冒烟夹具",
+   "status": "failed",
+   "agg": "failed",
+   "agg_n": 1,
+   "turn": {
+    "state": "failed",
+    "reason": "输入 ref 未物化到节点目录，read 失败退出",
+    "code": 1
+   },
+   "chips": [
+    [
+     "pending",
+     "输出一句话执行摘要"
+    ]
+   ],
+   "steps": [
+    {
+     "kind": "tool",
+     "name": "read",
+     "st": "err",
+     "exit": null,
+     "capped": false,
+     "truncated": false,
+     "total": 1,
+     "ref": null,
+     "out": [
+      "ENOENT: no such file, artifacts/接口清单.md（cwd 为节点目录，ref 未透传）"
+     ]
+    }
+   ],
+   "groups": [
+    {
+     "key": "read",
+     "n": 1,
+     "err": 1
+    }
+   ],
+   "stats": {
+    "by": [
+     {
+      "key": "read",
+      "n": 1
+     }
+    ],
+    "n": 1,
+    "ms": null,
+    "err": 1,
+    "run": 0
+   },
+   "tree": [
+    {
+     "path": "root/summarize",
+     "st": "failed",
+     "agg": "failed",
+     "wb": "",
+     "l": 2,
+     "acl": 0,
+     "turn": {
+      "state": "failed",
+      "reason": "输入 ref 未物化到节点目录，read 失败退出",
+      "code": 1
+     },
+     "steps": 1,
+     "spend": true,
+     "todo": null,
+     "compactions": 0,
+     "diffs": [],
+     "audits": [
+      {
+       "q": "缺少输入文件，是否改用 refs 直接读取？",
+       "decision": null,
+       "ms": null
+      }
+     ]
+    }
+   ],
+   "compactions": [],
+   "diffs": [],
+   "plan": null,
+   "sev": null,
+   "audits": [
+    {
+     "node": "root/summarize",
+     "q": "缺少输入文件，是否改用 refs 直接读取？",
+     "decision": null
+    }
+   ],
+   "arts": []
+  }
+ ],
+ "inbox": [],
+ "settled": []
+}

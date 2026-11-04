@@ -1,0 +1,65 @@
+{
+ "runs": [
+  {
+   "id": "c3749723-e556",
+   "title": "Echo hello once and call ev_done with a one-line summary",
+   "status": "failed",
+   "agg": "failed",
+   "agg_n": 1,
+   "turn": {
+    "state": "failed",
+    "reason": "budget exceeded：已用 1915 / 上限 10 tokens（turn 边界中止）",
+    "code": 1
+   },
+   "chips": [
+    [
+     "pending",
+     "one line summary"
+    ]
+   ],
+   "steps": [
+    {
+     "kind": "tool",
+     "name": "bash",
+     "st": "ok",
+     "exit": null,
+     "capped": false,
+     "truncated": false,
+     "total": 1,
+     "ref": null,
+     "out": [
+      "hello"
+     ]
+    }
+   ],
+   "groups": [
+    {
+     "key": "cmd",
+     "n": 1,
+     "err": 0
+    }
+   ],
+   "stats": {
+    "by": [
+     {
+      "key": "cmd",
+      "n": 1
+     }
+    ],
+    "n": 1,
+    "ms": 29,
+    "err": 0,
+    "run": 0
+   },
+   "tree": [],
+   "compactions": [],
+   "diffs": [],
+   "plan": null,
+   "sev": null,
+   "audits": [],
+   "arts": []
+  }
+ ],
+ "inbox": [],
+ "settled": []
+}

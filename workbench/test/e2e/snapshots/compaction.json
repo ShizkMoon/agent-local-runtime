@@ -1,0 +1,51 @@
+{
+ "runs": [
+  {
+   "id": "s20-compaction-demo",
+   "title": "压缩投影演示",
+   "status": "done",
+   "agg": "done",
+   "agg_n": 1,
+   "turn": {
+    "state": "completed",
+    "reason": "两轮完成；中途发生过一次压缩（50000 → 12000 tokens）",
+    "code": 0
+   },
+   "chips": [
+    [
+     "pending",
+     "压缩前后 tokens 可见"
+    ]
+   ],
+   "steps": [],
+   "groups": [],
+   "stats": {
+    "by": [],
+    "n": 0,
+    "ms": null,
+    "err": 0,
+    "run": 0
+   },
+   "tree": [],
+   "compactions": [
+    {
+     "before": 50000,
+     "after": 12000
+    }
+   ],
+   "diffs": [],
+   "plan": null,
+   "sev": null,
+   "audits": [],
+   "arts": []
+  }
+ ],
+ "inbox": [],
+ "settled": [
+  [
+   "压缩投影演示",
+   "<hh:mm>",
+   "s20-compaction-demo"
+  ]
+ ]
+}

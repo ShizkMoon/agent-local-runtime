@@ -1,0 +1,36 @@
+{
+  "v": 2,
+  "call_id": "c3",
+  "tool": "bash",
+  "tier": "exec",
+  "target": "npm run build --workspace workbench",
+  "restricted": false,
+  "rememberable": true,
+  "reason": "命中 spec.approve（bash）：这个工具每次都要人确认。",
+  "hit": "approve",
+  "args": {
+    "command": "npm run build --workspace workbench"
+  },
+  "targets": [],
+  "opts": [
+    {
+      "label": "允许一次",
+      "decision": "allowed-once"
+    },
+    {
+      "label": "记住这类（bash · npm run build --workspace workbench）",
+      "decision": "allowed-once",
+      "scope": {
+        "tool": "bash",
+        "tier": "exec",
+        "target": "npm run build --workspace workbench"
+      },
+      "hint": "本会话不再问同一个资源：bash · exec · npm run build --workspace workbench（换命令/换路径仍会问）"
+    },
+    {
+      "label": "拒绝",
+      "decision": "rejected"
+    }
+  ],
+  "asked_at": "2026-11-04T08:16:55.000Z"
+}

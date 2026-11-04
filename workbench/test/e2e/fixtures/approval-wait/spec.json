@@ -1,0 +1,12 @@
+{
+  "id": "node:seed-01-waiting/root",
+  "type": "assign",
+  "agent": "pi",
+  "profile": "orchestrator",
+  "goal": "把 SSE 断线改成显式黄条 + 全量校准，别静默停在最后一条 delta",
+  "accept": [
+    "断线 2s 内出黄条",
+    "重连后用 /api/v1/view 校准"
+  ],
+  "inputs": []
+}

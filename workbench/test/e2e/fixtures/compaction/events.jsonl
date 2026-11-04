@@ -1,0 +1,9 @@
+{"ts":"2026-11-04T07:00:00.000Z","kind":"spawn","data":{"cmd":"pi","agent":"pi"}}
+{"ts":"2026-11-04T07:00:01.000Z","kind":"turn","data":{"i":1}}
+{"ts":"2026-11-04T07:00:05.000Z","kind":"turn_end","data":{"i":1,"tokens":48000,"durationMs":4000}}
+{"ts":"2026-11-04T07:00:05.100Z","kind":"compaction_start","data":{"tokenCount":50000}}
+{"ts":"2026-11-04T07:00:06.100Z","kind":"compaction_summary","data":{"text":"把前 3 轮的探索摘要成 6 条事实"}}
+{"ts":"2026-11-04T07:00:07.000Z","kind":"compaction_end","data":{"tokens":12000}}
+{"ts":"2026-11-04T07:00:08.000Z","kind":"turn","data":{"i":2}}
+{"ts":"2026-11-04T07:00:12.000Z","kind":"turn_end","data":{"i":2,"tokens":9000,"durationMs":3000}}
+{"ts":"2026-11-04T07:00:13.000Z","kind":"exit","data":{"code":0}}

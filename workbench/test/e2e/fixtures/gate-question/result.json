@@ -1,0 +1,7 @@
+{
+  "id": "node:gate-question-demo/root",
+  "type": "result",
+  "status": "waiting",
+  "summary": "SSE 断线后要不要自动重连？",
+  "finished_at": "2026-11-04T08:17:00.000Z"
+}

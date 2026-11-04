@@ -1,0 +1,10 @@
+{
+  "nodePath": "root",
+  "case": "compaction",
+  "kind": "task",
+  "note": "compaction_start/summary/end 三事件 + usage.json，用于验证压缩投影（A8/G-6）",
+  "now": "2026-11-04T07:30:00.000Z",
+  "runId": "s20-compaction-demo",
+  "createdAt": "2026-11-04T07:00:00.000Z",
+  "subject": "压缩投影演示"
+}

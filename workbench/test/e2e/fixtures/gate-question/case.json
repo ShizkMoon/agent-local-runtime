@@ -1,0 +1,10 @@
+{
+  "case": "gate-question",
+  "runId": "gate-question-demo",
+  "nodePath": "root",
+  "subject": "SSE 断线策略：等一个人答",
+  "createdAt": "2026-11-04T08:13:54.867Z",
+  "now": "2026-11-04T08:30:00.000Z",
+  "kind": "meta.ui",
+  "note": "ev_gate 提问通道：result.status=waiting + gate.json（由 tools/make-approval-fixture.mjs 生成）→ 应进 view.inbox 的『需要你』卡"
+}

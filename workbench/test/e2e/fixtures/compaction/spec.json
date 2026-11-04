@@ -1,0 +1,12 @@
+{
+  "id": "node:s20-compaction-demo/root",
+  "type": "assign",
+  "agent": "pi",
+  "goal": "压缩演示：两轮对话 + 一次上下文压缩",
+  "accept": [
+    "压缩前后 tokens 可见"
+  ],
+  "budget": {
+    "tokens": 200000
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "id": "node:wb-fixture-demo1/root/summarize",
+  "parent": "node:wb-fixture-demo1/root",
+  "type": "assign",
+  "agent": "pi",
+  "goal": "汇总 fetch 产出为执行摘要",
+  "inputs": [
+    {
+      "ref": "node:wb-fixture-demo1/root/fetch/artifacts/接口清单.md",
+      "trust": "system"
+    }
+  ],
+  "accept": [
+    "输出一句话执行摘要"
+  ],
+  "depends": [
+    "node:wb-fixture-demo1/root/fetch"
+  ]
+}

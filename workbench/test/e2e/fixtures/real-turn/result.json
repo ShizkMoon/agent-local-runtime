@@ -1,0 +1,11 @@
+{
+  "id": "node:e9a3cf91-a19c/root",
+  "finished_at": "2026-11-04T08:12:57.438Z",
+  "status": "done",
+  "summary": "已列出当前目录 10 个条目（artifacts/、attempts.json、checkpoint.json、events.jsonl、loop.json、session/、spec.json、stdout.log、usage.json、worker.json），完整清单见 artifacts/ls_root.txt（ls -la 退出码 0）。",
+  "type": "result",
+  "spent": {
+    "tokens": 7482,
+    "minutes": 0.1
+  }
+}

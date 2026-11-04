@@ -1,0 +1,145 @@
+{
+ "runs": [
+  {
+   "id": "seed-01-waiting",
+   "title": "重构 bridge 的 SSE 重连",
+   "status": "working",
+   "agg": "blocked",
+   "agg_n": 1,
+   "turn": {
+    "state": "running",
+    "reason": null,
+    "code": null
+   },
+   "chips": [
+    [
+     "pending",
+     "断线 2s 内出黄条"
+    ],
+    [
+     "pending",
+     "重连后用 /api/v1/view 校准"
+    ]
+   ],
+   "steps": [
+    {
+     "kind": "tool",
+     "name": "bash",
+     "st": "ok",
+     "exit": null,
+     "capped": false,
+     "truncated": false,
+     "total": 1,
+     "ref": null,
+     "out": [
+      "PASS 52 tests"
+     ]
+    },
+    {
+     "kind": "tool",
+     "name": "read",
+     "st": "ok",
+     "exit": null,
+     "capped": false,
+     "truncated": false,
+     "total": 1,
+     "ref": null,
+     "out": [
+      "1640 lines"
+     ]
+    },
+    {
+     "kind": "edit",
+     "name": "update index.html",
+     "st": "ok",
+     "exit": null,
+     "capped": false,
+     "truncated": false,
+     "total": 3,
+     "ref": null,
+     "out": [
+      "-var a=1",
+      "+var a=2",
+      "+12 -3"
+     ]
+    },
+    {
+     "kind": "tool",
+     "name": "bash",
+     "st": "run",
+     "exit": null,
+     "capped": true,
+     "truncated": true,
+     "total": null,
+     "ref": null,
+     "out": [
+      "✔ S25 聚合 …"
+     ]
+    }
+   ],
+   "groups": [
+    {
+     "key": "cmd",
+     "n": 1,
+     "err": 0
+    },
+    {
+     "key": "read",
+     "n": 1,
+     "err": 0
+    },
+    {
+     "key": "edit",
+     "n": 1,
+     "err": 0
+    },
+    {
+     "key": "cmd",
+     "n": 1,
+     "err": 0
+    }
+   ],
+   "stats": {
+    "by": [
+     {
+      "key": "cmd",
+      "n": 2
+     },
+     {
+      "key": "edit",
+      "n": 1
+     },
+     {
+      "key": "read",
+      "n": 1
+     }
+    ],
+    "n": 4,
+    "ms": 1450,
+    "err": 0,
+    "run": 1
+   },
+   "tree": [],
+   "compactions": [],
+   "diffs": [
+    {
+     "file": "workbench/public/v1/index.html",
+     "add": 12,
+     "del": 3
+    }
+   ],
+   "plan": null,
+   "sev": null,
+   "audits": [
+    {
+     "node": "root",
+     "q": "bash",
+     "decision": null
+    }
+   ],
+   "arts": []
+  }
+ ],
+ "inbox": [],
+ "settled": []
+}

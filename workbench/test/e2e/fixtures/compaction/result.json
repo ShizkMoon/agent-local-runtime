@@ -1,0 +1,7 @@
+{
+  "id": "node:s20-compaction-demo/root",
+  "type": "result",
+  "status": "done",
+  "summary": "两轮完成；中途发生过一次压缩（50000 → 12000 tokens）",
+  "finished_at": "2026-11-04T07:00:13.000Z"
+}

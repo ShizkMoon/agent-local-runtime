@@ -1,0 +1,10 @@
+{
+  "nodePath": "root",
+  "case": "approval-wait",
+  "kind": "meta.ui",
+  "note": "worker.json 指向已死 pid + 未答 gate-req（由 tools/make-approval-fixture.mjs 用真实 gate.buildOpts 生成）→ 节点应显示 blocked/等你",
+  "now": "2026-11-04T08:20:00.000Z",
+  "runId": "seed-01-waiting",
+  "createdAt": "2026-11-04T08:13:54.867Z",
+  "subject": "重构 bridge 的 SSE 重连"
+}
