@@ -5,13 +5,14 @@
 // 接口面保持稳定，日后 Tauri 壳只换窗口层、不动此桥。
 import { createServer } from "node:http";
 import { existsSync, readdirSync, readFileSync, statSync, watch, appendFileSync, mkdirSync, openSync, readSync, closeSync, rmSync } from "node:fs";
-import { join, normalize, sep } from "node:path";
+import { join, normalize, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFile, execFileSync, spawn, type ChildProcess } from "node:child_process";
 
 const PORT = Number(process.env.WB_PORT ?? 4399);
 const HOST = "127.0.0.1";
-const STATE = process.env.AICA_STATE ?? join(process.env.LOCALAPPDATA!, "aica", "state");
+// resolve 成绝对路径：相对 AICA_STATE 会被经 ar 桥拉起的 worker 在各自 cwd 下再解析
+const STATE = resolve(process.env.AICA_STATE ?? join(process.env.LOCALAPPDATA!, "aica", "state"));
 const RUNS = join(STATE, "runs");
 const PUB = fileURLToPath(new URL("./public/", import.meta.url));
 const AR_CLI = process.env.AR_CLI ?? fileURLToPath(new URL("../src/cli.ts", import.meta.url));

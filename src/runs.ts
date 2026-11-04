@@ -1,12 +1,13 @@
 // runs/ 运行目录操作：唯一的运行状态源，全部纯文件
 import { mkdirSync, writeFileSync, readFileSync, existsSync, readdirSync, appendFileSync, renameSync, unlinkSync } from "node:fs";
 import { execFileSync } from "node:child_process";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import type { SpecEnvelope, ResultEnvelope, EventRecord } from "./envelope.ts";
 import { nodeId, stableId } from "./envelope.ts";
 
 // 空串按未设置处理：daemon 若把 AICA_STATE="" 传给 worker，STATE="" 会让 RUNS_DIR 变成相对路径
-export const STATE = process.env.AICA_STATE || join(process.env.LOCALAPPDATA!, "aica", "state");
+// resolve 成绝对路径：相对 AICA_STATE 会被 worker 在节点 cwd 下再解析一次，写出嵌套目录
+export const STATE = resolve(process.env.AICA_STATE || join(process.env.LOCALAPPDATA!, "aica", "state"));
 export const RUNS_DIR = join(STATE, "runs");
 const INDEX = join(RUNS_DIR, "index.jsonl");
 
