@@ -1,11 +1,22 @@
 #!/usr/bin/env node
 // ar CLI：无状态命令面。evd/受限入口/人工共用，统一 JSON envelope 输出
-import { createRun, writeSpec, readSpec, readResult, writeResult, checkRun, appendEvent, appendCmdOnce, readEventsSince, writeGate, resolveWaiting, abortWorker, forkNode, RUNS_DIR, runsDir } from "./runs.ts";
+import { createRun, writeSpec, readSpec, writeResult, checkRun, appendEvent, appendCmdOnce, readEventsSince, writeGate, abortWorker, forkNode, queueReply, RUNS_DIR, runsDir } from "./runs.ts";
 import { daemonLoop } from "./daemon.ts";
+import { listProposals, showProposal, applyProposal, rejectProposal, createProposal, ProposalError } from "./proposals.ts";
 import type { SpecEnvelope, NodeStatus } from "./envelope.ts";
+import { readFileSync } from "node:fs";
 
 function out(ok: boolean, command: string, data?: unknown, error?: unknown): void {
-  process.stdout.write(JSON.stringify({ version: "1.0", ok, command, ...(ok ? { data } : { error }) }) + "\n");
+  // 失败时也允许带 data（如 propose apply 的 verify 输出摘要）；error 仍是机器可判的 code/message
+  const payload = { version: "1.0", ok, command, ...(ok ? { data } : { error }), ...(!ok && data !== undefined ? { data } : {}) };
+  process.stdout.write(JSON.stringify(payload) + "\n");
+  // G-1 严格态：坏输入/失败不许"退出码 0 假装成功"；用法错误 2，其余失败 1
+  if (!ok) process.exitCode = (error as { code?: string } | undefined)?.code === "USAGE" ? 2 : 1;
+}
+
+/** 用法错误：结构化 USAGE + 退出码 2 */
+function usage(command: string, message: string, hint?: string): void {
+  out(false, command, undefined, { code: "USAGE", message, ...(hint ? { hint } : {}) });
 }
 
 function arg(flag: string): string | undefined {
@@ -34,19 +45,45 @@ function parseRules(raw: string | undefined): SpecEnvelope["rules"] {
   }
 }
 
+/** S22：spawn 的子路径归一（相对父节点、禁止逃逸/绝对路径/超深）；null = 非法 */
+function childPathOf(parent: string, raw: unknown): string | null {
+  const p = String(raw ?? "").trim().replace(/\\/g, "/").replace(/^\.\//, "");
+  if (!p) return null;
+  if (p.startsWith("/") || /^[a-zA-Z]:/.test(p)) return null;
+  const segs = p.split("/");
+  if (segs.some((s) => !s || s === "." || s === ".." || !/^[A-Za-z0-9._-]+$/.test(s))) return null;
+  const full = p.startsWith(parent + "/") ? p : `${parent}/${p}`;
+  if (!full.startsWith(parent + "/")) return null;
+  if (full.split("/").length > 6) return null;
+  return full;
+}
+
+/** 读文件参数：--flag <path|->；缺省时按需读 stdin */
+async function readFileArg(flag: string, fallbackStdin: boolean): Promise<string> {
+  const v = arg(flag);
+  if (!v) return fallbackStdin ? await readStdin() : "";
+  if (v === "-") return await readStdin();
+  try { return readFileSync(v, "utf8"); } catch { return ""; }
+}
+
 const cmd = process.argv[2];
 
 async function main(): Promise<void> {
   switch (cmd) {
     case "run-create": {
-      const subject = arg("--subject") ?? (await readStdin()).trim();
+      const subject = (arg("--subject") ?? (await readStdin()).trim()).trim();
+      if (!subject) return usage(cmd, "缺任务描述", "ar run-create --subject <文本>（或 stdin 传非空文本）");
       const { rootId, dir } = createRun({ kind: arg("--kind"), subject });
       return out(true, cmd, { root_id: rootId, dir });
     }
     case "dispatch": {
       // evd 适配器入口：stdin 收任务 JSON → 建 Run + 根节点 spec → 立即返回（异步投递模式）
-      const task = JSON.parse(await readStdin() || "{}");
-      const { rootId } = createRun({ kind: task.kind, subject: task.subject ?? task.description });
+      let task: Record<string, any>;
+      try { task = JSON.parse((await readStdin()) || "{}"); }
+      catch (e) { return out(false, cmd, undefined, { code: "BAD_INPUT", message: `stdin 不是合法 JSON：${String((e as Error).message).split("\n")[0].slice(0, 200)}` }); }
+      const subject = String(task?.subject ?? task?.description ?? "").trim();
+      if (!subject) return usage(cmd, "缺 subject / description", 'dispatch 需要 stdin JSON，例如 {"subject":"任务","goal":"..."}');
+      const { rootId } = createRun({ kind: task.kind, subject });
       writeSpec(rootId, "root", {
         type: "assign",
         agent: task.agent ?? "pi",
@@ -68,7 +105,8 @@ async function main(): Promise<void> {
       return out(true, cmd, { root_id: rootId, node: `node:${rootId}/root`, ev_id: task.ev_id });
     }
     case "node-create": {
-      const rootId = arg("--run")!;
+      const rootId = arg("--run");
+      if (!rootId) return usage(cmd, "缺 --run", "ar node-create --run <root> [--path root/a] --goal <文本>");
       writeSpec(rootId, arg("--path") ?? `${Date.now().toString(36)}`, {
         type: "assign",
         agent: arg("--agent") ?? "pi",
@@ -78,7 +116,13 @@ async function main(): Promise<void> {
         parent: arg("--parent"),
         depends: arg("--deps")?.split(","),
         accept: arg("--accept")?.split(";") ?? ["输出一句话执行摘要"],
-        budget: { depth_left: Number(arg("--depth") ?? 2), ...(arg("--minutes") ? { minutes: Number(arg("--minutes")) } : {}) },
+        budget: {
+          depth_left: Number(arg("--depth") ?? 2),
+          ...(arg("--minutes") ? { minutes: Number(arg("--minutes")) } : {}),
+          // S22：并发策略与 token 预算透传（spawn 工具用）
+          ...(arg("--tokens") ? { tokens: Number(arg("--tokens")) } : {}),
+          ...(arg("--parallel") ? { parallel: Number(arg("--parallel")) } : {}),
+        },
         tools: arg("--tools")?.split(","),
         // S1 新字段：--approve/--deny/--deny-paths/--skills 分号分隔，--permission 档位，--rules JSON 或 pattern=>message;…
         permission: arg("--permission") as SpecEnvelope["permission"],
@@ -92,27 +136,30 @@ async function main(): Promise<void> {
     }
     case "check": {
       const rootId = arg("--run") ?? process.argv[3];
+      if (!rootId) return usage(cmd, "缺 --run", "ar check --run <root>");
       return out(true, cmd, checkRun(rootId));
     }
     case "reply": {
-      const rootId = arg("--run")!;
+      const rootId = arg("--run");
+      if (!rootId) return usage(cmd, "缺 --run", "ar reply --run <root> [--node root] --text <文本> [--mode queue|interrupt]");
       const path = arg("--node") ?? "root";
-      const spec = readSpec(rootId, path);
-      if (!spec) return out(false, cmd, undefined, { code: "NO_NODE", path });
       const text = arg("--text") ?? (await readStdin()).trim();
-      spec.reply = [...(spec.reply ?? []), { text, ts: new Date().toISOString() }];
-      writeSpec(rootId, path, spec);
-      // 隐式 resume：waiting 节点的 result 归档为 result.resolved.json，daemon 下一轮重新拉起
-      const resumed = resolveWaiting(rootId, path);
+      // S22：running 节点只排队（本轮结束后送达）；waiting/done 照旧；interrupt = 打断并重拉（显式人操作）
+      const mode = arg("--mode") === "interrupt" ? "interrupt" : "queue";
+      let r: ReturnType<typeof queueReply>;
+      try { r = queueReply(rootId, path, text, mode); }
+      catch (e) { return out(false, cmd, undefined, { code: "NO_NODE", path, message: String((e as Error).message) }); }
       // S21：命令回执幂等 —— 同一条回复重放不会刷出第二条 cmd 事件（spec.reply 里仍逐条留痕）
       const fresh = appendCmdOnce(rootId, path, "reply", { text });
-      return out(true, cmd, { node: spec.id, resumed, receipt: fresh });
+      return out(true, cmd, { node: r.node, resumed: r.resumed, delivery: r.delivery, pid: r.pid, receipt: fresh });
     }
     case "gate": {
       // Worker 侧调用（ev_gate 工具）：写 waiting result + gate.json，节点挂起等人工回复
-      const rootId = process.env.AR_ROOT_ID ?? arg("--run")!;
+      const rootId = process.env.AR_ROOT_ID ?? arg("--run");
+      if (!rootId) return usage(cmd, "缺 --run（或 AR_ROOT_ID）", "ar gate --run <root> --question <文本>");
       const path = process.env.AR_NODE_PATH ?? arg("--node") ?? "root";
       const question = arg("--question") ?? (await readStdin()).trim();
+      if (!question) return usage(cmd, "缺 --question", "ar gate --run <root> --question <文本> [--opts 同意;拒绝]");
       const opts = arg("--opts")?.split(";").filter(Boolean);
       writeGate(rootId, path, { question, ...(opts?.length ? { opts } : {}) });
       const r = writeResult(rootId, path, { status: "waiting", summary: question });
@@ -122,23 +169,26 @@ async function main(): Promise<void> {
     case "done":
     case "fail": {
       // Worker 侧调用：写 result.json（evd 协议外的那一层，worker 进程内执行）
-      const rootId = process.env.AR_ROOT_ID ?? arg("--run")!;
+      const rootId = process.env.AR_ROOT_ID ?? arg("--run");
+      if (!rootId) return usage(cmd, "缺 --run（或 AR_ROOT_ID）", `ar ${cmd} --run <root> --summary <文本>`);
       const path = process.env.AR_NODE_PATH ?? arg("--node") ?? "root";
       const status: NodeStatus = cmd === "done" ? "done" : "failed";
       // S6：worker 自报累计 token；缺省由 daemon 在 worker 退出时按 usage.json 兜底
       const st = Number(arg("--spent-tokens"));
+      const summary = arg("--summary") ?? process.argv[3] ?? "";
       const r = writeResult(rootId, path, {
-        status, summary: arg("--summary") ?? process.argv[3] ?? "",
+        status, summary,
         ...(Number.isFinite(st) && st > 0 ? { spent: { tokens: st } } : {}),
       });
       // S21：同一条 done/fail 重放 → 只留一条 cmd 回执（result 本身早就幂等）
-      appendCmdOnce(rootId, path, cmd, { status, summary: arg("--summary") ?? process.argv[3] ?? "" });
+      appendCmdOnce(rootId, path, cmd, { status, summary });
       return out(true, cmd, r);
     }
     case "wait": {
       // Worker 侧调用（ev_wait 工具）：写 waiting result + wait_on + gate.json；
       // 全部子节点 done 后 pendingNodes 自动归档并注入子摘要复活（无需人工回复）
-      const rootId = process.env.AR_ROOT_ID ?? arg("--run")!;
+      const rootId = process.env.AR_ROOT_ID ?? arg("--run");
+      if (!rootId) return usage(cmd, "缺 --run（或 AR_ROOT_ID）", "ar wait --run <root> --on root/a,root/b");
       const path = process.env.AR_NODE_PATH ?? arg("--node") ?? "root";
       const on = (arg("--on") ?? "").split(",").map((s) => s.trim()).filter(Boolean);
       writeGate(rootId, path, { question: "等待子节点", opts: [] });
@@ -147,14 +197,16 @@ async function main(): Promise<void> {
       return out(true, cmd, r);
     }
     case "event": {
-      const rootId = process.env.AR_ROOT_ID ?? arg("--run")!;
+      const rootId = process.env.AR_ROOT_ID ?? arg("--run");
+      if (!rootId) return usage(cmd, "缺 --run（或 AR_ROOT_ID）", "ar event --run <root> --kind <name>");
       const path = process.env.AR_NODE_PATH ?? arg("--node") ?? "root";
       appendEvent(rootId, path, { kind: (arg("--kind") as never) ?? "checkpoint", data: { text: process.argv[3] ?? "" } });
       return out(true, cmd, {});
     }
     case "abort": {
       // 中止 live worker：读 worker.json → taskkill 进程树 → 幂等 failed("aborted by user") + abort 事件
-      const rootId = process.env.AR_ROOT_ID ?? arg("--run")!;
+      const rootId = process.env.AR_ROOT_ID ?? arg("--run");
+      if (!rootId) return usage(cmd, "缺 --run（或 AR_ROOT_ID）", "ar abort --run <root> [--node root]");
       const path = process.env.AR_NODE_PATH ?? arg("--node") ?? "root";
       return out(true, cmd, abortWorker(rootId, path, "aborted by user"));
     }
@@ -163,16 +215,111 @@ async function main(): Promise<void> {
       const rootId = arg("--run") ?? process.argv[3];
       const path = arg("--node") ?? "root";
       const since = Math.max(0, Number(arg("--since") ?? 0) || 0);
-      if (!rootId) return out(false, cmd, undefined, { code: "USAGE", hint: "ar events --run <root> [--node root] [--since N]" });
+      if (!rootId) return usage(cmd, "缺 --run", "ar events --run <root> [--node root] [--since N]");
       return out(true, cmd, readEventsSince(rootId, path, since));
     }
     case "fork": {
       // S21：把一个节点复制成新 run（spec 保留、result/events 清空、forked_from 记来源）
       const rootId = arg("--run") ?? process.argv[3];
       const path = arg("--node") ?? "root";
-      if (!rootId) return out(false, cmd, undefined, { code: "USAGE", hint: "ar fork --run <root> [--node root]" });
+      if (!rootId) return usage(cmd, "缺 --run", "ar fork --run <root> [--node root]");
       const forked = forkNode(rootId, path);
-      return forked ? out(true, cmd, forked) : out(false, cmd, undefined, { code: "NO_NODE", path });
+      return forked ? out(true, cmd, forked) : out(false, cmd, undefined, { code: "NOT_FOUND", path, message: `节点不存在：${path}` });
+    }
+    case "spawn": {
+      // S22 子代理原语（spawn 工具走这里）：stdin JSON → 子节点 spec。
+      // 继承父节点的审批/工具面（子节点不能因 spawn 绕开 supervised/deny），depth_left 严格 -1。
+      let req: any;
+      try { req = JSON.parse((await readStdin()) || "{}"); }
+      catch { return out(false, cmd, undefined, { code: "USAGE", message: "stdin 需要 JSON 对象" }); }
+      const rootId = String(req.run ?? process.env.AR_ROOT_ID ?? "");
+      const parentPath = String(req.parent ?? process.env.AR_NODE_PATH ?? "root");
+      if (!rootId) return out(false, cmd, undefined, { code: "USAGE", message: "缺 run（或 AR_ROOT_ID）" });
+      const parentSpec = readSpec(rootId, parentPath);
+      if (!parentSpec) return out(false, cmd, undefined, { code: "NO_PARENT", parent: parentPath });
+      const childPath = childPathOf(parentPath, req.path);
+      if (!childPath) return out(false, cmd, undefined, { code: "BAD_PATH", path: req.path, message: "path 必须是父节点之下的相对名（字母数字._-，≤6 段）" });
+      const goal = String(req.goal ?? "").trim();
+      if (!goal) return out(false, cmd, undefined, { code: "USAGE", message: "缺 goal" });
+      if (readSpec(rootId, childPath)) return out(false, cmd, undefined, { code: "EXISTS", path: childPath });
+      const parentDepth = Number(parentSpec.budget?.depth_left ?? 0);
+      if (!(parentDepth >= 1)) return out(false, cmd, undefined, { code: "DEPTH", depth_left: parentDepth, message: "depth_left=0：不能再派子节点" });
+      const b = (req.budget ?? {}) as Record<string, unknown>;
+      const spec = writeSpec(rootId, childPath, {
+        type: "assign",
+        agent: String(req.agent ?? parentSpec.agent ?? "pi"),
+        profile: (req.profile ?? parentSpec.profile) as SpecEnvelope["profile"],
+        model: req.model ?? parentSpec.model,
+        goal,
+        parent: parentSpec.id,
+        accept: Array.isArray(req.accept) && req.accept.length ? req.accept.map(String) : ["输出一句话执行摘要"],
+        budget: {
+          depth_left: parentDepth - 1,
+          ...(Number(b.minutes) > 0 ? { minutes: Number(b.minutes) } : {}),
+          ...(Number(b.tokens) > 0 ? { tokens: Number(b.tokens) } : {}),
+          ...(Number(b.parallel) > 0 ? { parallel: Number(b.parallel) } : {}),
+        },
+        permission: parentSpec.permission,
+        tools: parentSpec.tools,
+        deny: parentSpec.deny,
+        deny_paths: parentSpec.deny_paths,
+        restricted_paths: parentSpec.restricted_paths,
+        rules: parentSpec.rules,
+        skills: parentSpec.skills,
+      });
+      appendEvent(rootId, parentPath, { kind: "spawn", data: { path: childPath, node_id: spec.id, goal: spec.goal } });
+      return out(true, cmd, { node_id: spec.id, path: childPath, parent: parentSpec.id, depth_left: spec.budget?.depth_left });
+    }
+    case "propose": {
+      // S28 审阅面（§9.3）：list / show / apply [--force] / reject --reason / new
+      const sub = process.argv[3] ?? "list";
+      const fail = (e: unknown) => {
+        const pe = e as ProposalError;
+        return out(false, `propose:${sub}`, undefined, {
+          code: pe?.code ?? "ERROR", message: String(pe?.message ?? e),
+          ...(pe?.detail ? { detail: pe.detail } : {}),
+        });
+      };
+      try {
+        if (sub === "list") return out(true, "propose:list", { proposals: listProposals() });
+        if (sub === "show") {
+          const slug = process.argv[4];
+          if (!slug) return out(false, "propose:show", undefined, { code: "USAGE", message: "ar propose show <slug>" });
+          const p = showProposal(slug);
+          return p ? out(true, "propose:show", { proposal: p }) : out(false, "propose:show", undefined, { code: "NOT_FOUND", slug });
+        }
+        if (sub === "apply") {
+          const slug = process.argv[4];
+          if (!slug) return out(false, "propose:apply", undefined, { code: "USAGE", message: "ar propose apply <slug> [--force]" });
+          const r = applyProposal(slug, { force: process.argv.includes("--force") });
+          return r.ok ? out(true, "propose:apply", r) : out(false, "propose:apply", { result: r }, { code: r.code ?? "APPLY_FAILED", message: r.message });
+        }
+        if (sub === "reject") {
+          const slug = process.argv[4];
+          if (!slug) return out(false, "propose:reject", undefined, { code: "USAGE", message: "ar propose reject <slug> --reason <text>" });
+          const r = rejectProposal(slug, arg("--reason") ?? "");
+          return r.ok ? out(true, "propose:reject", r) : out(false, "propose:reject", undefined, { code: r.code ?? "REJECT_FAILED", message: r.message });
+        }
+        if (sub === "new") {
+          const slug = arg("--slug") ?? process.argv[4];
+          if (!slug) return out(false, "propose:new", undefined, { code: "USAGE", message: "ar propose new --slug <slug> [--patch <file|->] [--proposal <file|->]" });
+          const patch = await readFileArg("--patch", true);
+          const proposal = await readFileArg("--proposal", false);
+          const verify = (arg("--verify-cmd") || arg("--verify-timeout"))
+            ? { ...(arg("--verify-cmd") ? { cmd: arg("--verify-cmd")! } : {}), ...(arg("--verify-timeout") ? { timeout_ms: Number(arg("--verify-timeout")) } : {}) }
+            : undefined;
+          const rec = createProposal({
+            slug, patch, proposal, verify,
+            ...(arg("--root") ? { root: arg("--root")! } : {}),
+            ...(arg("--run") ? { source: { root_id: arg("--run"), path: arg("--node") ?? "root" } } : {}),
+          });
+          return out(true, "propose:new", { slug: rec.slug, dir: rec.dir, risk: rec.risk, files: rec.meta.files, verify: rec.verify });
+        }
+        return out(false, "propose", undefined, {
+          code: "USAGE",
+          subcommands: ["list", "show <slug>", "apply <slug> [--force]", "reject <slug> --reason <text>", "new --slug <slug> [--patch <file|->]"],
+        });
+      } catch (e) { return fail(e); }
     }
     case "daemon": {
       runsDir();
@@ -187,9 +334,13 @@ async function main(): Promise<void> {
     default:
       return out(false, "help", undefined, {
         code: "USAGE",
-        commands: ["run-create", "dispatch", "node-create", "check", "reply", "gate", "done", "fail", "wait", "event", "events", "fork", "abort", "daemon", "version"],
+        commands: ["run-create", "dispatch", "node-create", "spawn", "check", "reply", "gate", "done", "fail", "wait", "event", "events", "fork", "abort", "propose", "daemon", "version"],
       });
   }
 }
 
-main().catch((e) => out(false, cmd ?? "?", undefined, { code: "FATAL", message: String(e?.stack ?? e) }));
+// G-1：意外异常也只回 envelope（INTERNAL + 首行 message，无裸栈），退出码 1
+main().catch((e) => {
+  const msg = String((e as Error)?.message ?? e).split("\n")[0].slice(0, 400);
+  out(false, cmd ?? "?", undefined, { code: "INTERNAL", message: msg || "internal error" });
+});

@@ -8,6 +8,8 @@ import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { Type } from "typebox";
 import { resolveBin } from "./paths.ts";
+// S28：提案白名单/落盘与 CLI 共用一份实现（避免工具与 ar propose 两套判定漂移）
+import { createProposal } from "../../src/proposals.ts";
 
 const ART = join(process.cwd(), "artifacts");
 const PREVIEW = 2000;
@@ -20,6 +22,20 @@ function sh(cmd: string, args: string[]): string {
 
 function ar(args: string[]): string {
   return AR_CLI ? sh(process.execPath, [AR_CLI, ...args]) : sh("ar", args);
+}
+
+/** 带 stdin 的 ar 调用（spawn 的 JSON 载荷走 stdin，避免命令行长度/转义问题）
+ *  G-1 之后 CLI 失败会非 0 退出：envelope 仍在 stdout，交给调用方按 ok:false 处理 */
+function arIn(args: string[], input: string): string {
+  const bin = AR_CLI ? process.execPath : "ar";
+  const argv = AR_CLI ? [AR_CLI, ...args] : args;
+  try {
+    return execFileSync(bin, argv, { input, encoding: "utf8", timeout: 120_000, windowsHide: true });
+  } catch (e) {
+    const stdout = String((e as { stdout?: string | Buffer }).stdout ?? "");
+    if (stdout.trim()) return stdout;
+    throw e;
+  }
 }
 
 // AgentToolResult：content 是模型可见文本，details 留给 UI/日志
@@ -224,6 +240,70 @@ export default function (pi: any) {
       // execFile argv 不经 shell：script 作为单个 argv 传给 ego，无 cmd 转义/截断问题
       // （上限约 32k 字符的 Windows 命令行；大输出仍走 artifact 落盘契约）
       return ok(spill(sh(bin, ["nodejs", "-e", args.script]), "ego"));
+    },
+  });
+
+  pi.registerTool({
+    name: "spawn",
+    label: "Spawn",
+    description: "派子节点（命名/寻址/隔离）：写子节点 spec 并返回 node_id。path 相对本节点（fetch-a → root/fetch-a）；budget.depth_left 自动 -1；继承父节点的审批/工具面。spawn 本身要过审批门。",
+    parameters: Type.Object({
+      path: Type.String({ description: "子节点名（相对本节点，字母数字 . _ -，可含 / 表示更深一层）" }),
+      goal: Type.String({ description: "子任务目标（子节点 worker 的 goal）" }),
+      accept: Type.Optional(Type.Array(Type.String(), { description: "验收条文；缺省 ['输出一句话执行摘要']" })),
+      agent: Type.Optional(Type.String({ description: "缺省继承父节点（pi）" })),
+      profile: Type.Optional(Type.String({ description: "worker/reviewer/orchestrator/advisor；缺省继承父节点" })),
+      budget: Type.Optional(Type.Object({
+        tokens: Type.Optional(Type.Number({ description: "token 预算（daemon turn 边界拦截）" })),
+        minutes: Type.Optional(Type.Number({ description: "墙钟预算（超时 abort）" })),
+        parallel: Type.Optional(Type.Number({ description: "该子任务自己再派子节点时的并发上限" })),
+      })),
+    }),
+    async execute(_id: string, args: any) {
+      const run = process.env.AR_ROOT_ID;
+      const parent = process.env.AR_NODE_PATH;
+      if (!run || !parent) return err("spawn 只能在 worker 内使用（缺 AR_ROOT_ID/AR_NODE_PATH）");
+      try {
+        const env = JSON.parse(arIn(["spawn"], JSON.stringify({ ...args, run, parent })));
+        if (!env?.ok) return err(`spawn 失败：${env?.error?.code ?? "?"} ${env?.error?.message ?? ""}`.trim());
+        const d = env.data ?? {};
+        return ok(`node_id=${d.node_id}\npath=${d.path}\nparent=${d.parent}\ndepth_left=${d.depth_left}`);
+      } catch (e) {
+        return err(`spawn 失败：${String((e as Error)?.message ?? e)}`);
+      }
+    },
+  });
+
+  pi.registerTool({
+    name: "ev_propose",
+    label: "Ev Propose",
+    description: "自进化提案（S28）：只写 proposals/<slug>/{proposal.md,patch.diff,verify.json,meta.json}，不直接改仓库。白名单外路径直接报错；应用要人工 `ar propose apply`（high 需 --force）。",
+    parameters: Type.Object({
+      slug: Type.String({ description: "提案名（字母数字 . _ -，≤64）" }),
+      proposal: Type.String({ description: "proposal.md：动机 / 预期效果 / 风险 / 影响的文件" }),
+      patch: Type.String({ description: "unified diff（---/+++/@@），只允许白名单路径" }),
+      verify_cmd: Type.Optional(Type.String({ description: "校验命令，缺省 node --test workbench/test" })),
+      verify_timeout_ms: Type.Optional(Type.Number({ description: "校验超时，缺省 180000" })),
+    }),
+    async execute(_id: string, args: any) {
+      try {
+        const rec = createProposal({
+          slug: args.slug,
+          proposal: args.proposal,
+          patch: args.patch,
+          verify: {
+            ...(args.verify_cmd ? { cmd: args.verify_cmd } : {}),
+            ...(args.verify_timeout_ms ? { timeout_ms: args.verify_timeout_ms } : {}),
+          },
+          root: join(process.cwd(), "proposals"),
+          ...(process.env.AR_ROOT_ID ? { source: { root_id: process.env.AR_ROOT_ID, path: process.env.AR_NODE_PATH ?? "root" } } : {}),
+        });
+        const files = rec.meta.files.map((f) => `${f.path}${f.action === "create" ? "（新建）" : f.action === "delete" ? "（删除）" : ""}`).join("\n  ");
+        return ok(`提案已写入：${rec.dir}\nrisk=${rec.risk}\n影响文件:\n  ${files}\n应用：ar propose apply ${rec.slug}${rec.risk === "high" ? " --force" : ""}`);
+      } catch (e) {
+        const pe = e as { code?: string; message?: string };
+        return err(`ev_propose 拒绝：${pe?.code ?? "ERROR"} ${pe?.message ?? String(e)}`);
+      }
     },
   });
 }

@@ -39,6 +39,8 @@ export interface RunMeta {
   kind?: string;
   subject?: string;
   plan_version: number;
+  /** S22：该 run 的并发上限（缺省 2）；spec.budget.parallel 优先 */
+  parallel?: number;
 }
 
 /** 创建 Run：写 index + plan.v1 + 根节点目录 */
@@ -383,6 +385,44 @@ export function resolveWaiting(rootId: string, path: string): boolean {
   } catch { return false; }
 }
 
+// ---- S22：回复投递三态 ----
+// queue（默认）：worker 在跑 → 只写 spec.reply + reply-queued 事件（本轮结束后、下一次拉起才送达）；
+//                 没有 live worker → 照旧 resume（waiting 归档 result）或仅存进 spec.reply。
+// interrupt：显式打断（人操作，不是崩溃重放）——杀 worker → 删掉本次 abort 写的 failed result → 队列投递，daemon 重拉。
+export type ReplyDelivery = "queued" | "resumed" | "stored" | "interrupted";
+
+export function queueReply(
+  rootId: string,
+  path: string,
+  text: string,
+  mode: "queue" | "interrupt" = "queue",
+): { node: string; resumed: boolean; delivery: ReplyDelivery; pid: number | null; at: string } {
+  const spec = readSpec(rootId, path);
+  if (!spec) throw new Error(`NO_NODE ${path}`);
+  const at = new Date().toISOString();
+  const live = workerLive(rootId, path);
+  const pid = readWorker(rootId, path)?.pid ?? null;
+  spec.reply = [...(spec.reply ?? []), { text, ts: at }];
+  writeSpec(rootId, path, spec);
+  if (live && mode === "queue") {
+    appendEvent(rootId, path, { kind: "reply-queued", data: { text: text.slice(0, 500), pid, mode: "queue" } });
+    return { node: spec.id, resumed: false, delivery: "queued", pid, at };
+  }
+  if (live && mode === "interrupt") {
+    const summary = "interrupted by user (reply --mode interrupt)";
+    abortWorker(rootId, path, summary);
+    // 只删本次 abort 写的 result（进程中断后的"重拉"是显式人操作；崩溃重放仍按 process-bound effect 不重放）
+    const r = readResult(rootId, path);
+    if (r?.status === "failed" && r.summary === summary) {
+      try { unlinkSync(join(nodeDir(rootId, path), "result.json")); } catch { /* 已不在则下次重拉 */ }
+    }
+    appendEvent(rootId, path, { kind: "reply-queued", data: { text: text.slice(0, 500), pid, mode: "interrupt" } });
+    return { node: spec.id, resumed: true, delivery: "interrupted", pid, at };
+  }
+  const resumed = resolveWaiting(rootId, path);
+  return { node: spec.id, resumed, delivery: resumed ? "resumed" : "stored", pid, at };
+}
+
 /** dep 路径归一：depends 可写兄弟 path（"root/a"）或完整节点 id（"node:<root>/root/a"） */
 function depPath(rootId: string, dep: string): string {
   const prefix = `node:${rootId}/`;
@@ -390,8 +430,9 @@ function depPath(rootId: string, dep: string): string {
 }
 
 /** 递归列出 run 下全部节点 path（nodes/root/a 嵌套；pendingNodes/checkRun 共用一份走法）
- *  S21：artifacts / inputs / session 是节点内的数据目录，不是子节点（以前会被 check 误列成 running） */
-const NODE_DATA_DIRS = new Set(["artifacts", "inputs", "session"]);
+ *  S21：artifacts / inputs / session 是节点内的数据目录，不是子节点（以前会被 check 误列成 running）
+ *  S28：proposals/ 是提案目录（ev_propose 写的），同样不是子节点 */
+const NODE_DATA_DIRS = new Set(["artifacts", "inputs", "session", "proposals"]);
 export function listNodePaths(rootId: string): string[] {
   const nodesRoot = join(runDir(rootId), "nodes");
   if (!existsSync(nodesRoot)) return [];
@@ -409,14 +450,48 @@ export function listNodePaths(rootId: string): string[] {
   return paths;
 }
 
-/** daemon 消费的视图：待拉起节点。resumed = waiting 经人工回复后重新拉起（userMessage 追加恢复行用） */
+/** S22 并发策略：run.json.parallel ?? spec.budget.parallel ?? AR_PARALLEL ?? 2；上限 16（防手滑写 0/负数） */
+export const DEFAULT_PARALLEL = 2;
+export const MAX_PARALLEL = 16;
+
+function readRunMeta(rootId: string): RunMeta | null {
+  try { return readJson<RunMeta>(join(runDir(rootId), "run.json")); } catch { return null; }
+}
+
+function clampParallel(n: number): number {
+  if (!Number.isFinite(n)) return DEFAULT_PARALLEL;
+  return Math.min(MAX_PARALLEL, Math.max(1, Math.floor(n)));
+}
+
+export function parallelLimit(rootId: string, spec?: SpecEnvelope | null): number {
+  const fromSpec = Number((spec?.budget as { parallel?: number } | undefined)?.parallel);
+  if (Number.isFinite(fromSpec) && fromSpec >= 1) return clampParallel(fromSpec);
+  const fromRun = Number(readRunMeta(rootId)?.parallel);
+  if (Number.isFinite(fromRun) && fromRun >= 1) return clampParallel(fromRun);
+  const fromEnv = Number(process.env.AR_PARALLEL);
+  if (Number.isFinite(fromEnv) && fromEnv >= 1) return clampParallel(fromEnv);
+  return DEFAULT_PARALLEL;
+}
+
+/** daemon 消费的视图：待拉起节点。resumed = waiting 经人工回复后重新拉起（userMessage 追加恢复行用）
+ *  S22：按 run 并发上限只放行 N 个——已 live 的 worker 也占配额，跨 daemon 重启同样成立 */
 export function pendingNodes(): { rootId: string; path: string; spec: SpecEnvelope; resumed?: boolean }[] {
   runsDir();
   const out: { rootId: string; path: string; spec: SpecEnvelope; resumed?: boolean }[] = [];
+  const used = new Map<string, number>();
+  const take = (rootId: string): boolean => {
+    const n = used.get(rootId) ?? 0;
+    used.set(rootId, n + 1);
+    return n;
+  };
+  const release = (rootId: string): void => {
+    const n = used.get(rootId) ?? 0;
+    if (n > 0) used.set(rootId, n - 1);
+  };
   for (const rootId of readdirSync(RUNS_DIR)) {
     for (const path of listNodePaths(rootId)) {
-      // worker.json 租约锁：live worker 在跑就 skip（daemon 重启也不二次拉起）
-      if (workerLive(rootId, path)) continue;
+      // worker.json 租约锁：live worker 在跑就 skip（daemon 重启也不二次拉起）；但照样占一个并发名额
+      if (workerLive(rootId, path)) { take(rootId); continue; }
       const spec = readSpec(rootId, path);
       if (!spec) continue;
       // S21：死锁 + 无 result = 孤儿 → 标 failed("orphaned") 收尾，**不重放**（process-bound effect）
@@ -453,6 +528,8 @@ export function pendingNodes(): { rootId: string; path: string; spec: SpecEnvelo
       }
       // 依赖闸门：spec.depends 列出的兄弟 path 全部 done 才拉起（dep 完成后下一轮自然满足）
       if (spec.depends?.length && spec.depends.some((d) => readResult(rootId, depPath(rootId, d))?.status !== "done")) continue;
+      // 并发闸门：本 run 已占满 N 个名额就不再放行（daemon 下一轮再取）
+      if (take(rootId) >= parallelLimit(rootId, spec)) { release(rootId); continue; }
       out.push({ rootId, path, spec, resumed });
     }
   }

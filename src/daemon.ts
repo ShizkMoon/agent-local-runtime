@@ -4,12 +4,14 @@ import { spawn, execFileSync } from "node:child_process";
 import { appendFileSync, existsSync, readFileSync, mkdirSync, copyFileSync, writeFileSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { pendingNodes, appendEvent, readResult, writeResult, patchResult, writeSpec, writeWorker, clearWorker, abortWorker, nodeDir, RUNS_DIR, STATE, writeCheckpoint, readCheckpoint, lastSeq, closeDanglingTools } from "./runs.ts";
+import { pendingNodes, appendEvent, readResult, writeResult, patchResult, writeSpec, writeWorker, clearWorker, abortWorker, nodeDir, RUNS_DIR, STATE, DEFAULT_PARALLEL, writeCheckpoint, readCheckpoint, lastSeq, closeDanglingTools } from "./runs.ts";
 import { tapStdout, readUsage, usageTokens, type UsageLedger, type UsageTurn } from "./transcribe.ts";
 import type { SpecEnvelope } from "./envelope.ts";
 
 const POLL_MS = Number(process.env.AR_POLL_MS ?? 2000);
-const MAX_WORKERS = Number(process.env.AR_MAX_WORKERS ?? 2);
+// S22：并发以 run 为单位（run.json.parallel / spec.budget.parallel，默认 2，见 runs.pendingNodes）。
+// 这里只保留全局安全阀（跨 run 的进程总数），防止多个 run 同时放行把机器打满。
+const GLOBAL_MAX_WORKERS = Number(process.env.AR_MAX_WORKERS ?? Math.max(DEFAULT_PARALLEL * 4, 8));
 const AICA_PI = process.env.AICA_PI_PKG ?? fileURLToPath(new URL("../aica-pi", import.meta.url));
 const AR_CLI = fileURLToPath(new URL("./cli.ts", import.meta.url));
 const DEFAULT_PI_MODEL = "opencode-pool/deepseek-v4.1-flash";
@@ -22,6 +24,8 @@ const PROTOCOL_TOOLS = ["ev_done", "ev_fail", "ev_gate", "ev_wait", "ev_todo"];
 const DEFAULT_PI_TOOLS = [
   "read", "write", "edit", "bash", "powershell", "ls", "find", "grep",
   ...PROTOCOL_TOOLS, "kn_recall", "ar_read", "ev_learn",
+  // S22/S28：派子节点与自进化提案属于能力（要过 gate），不是恒授协议
+  "spawn", "ev_propose",
 ];
 // S11 reviewer 默认面：只读核证（不写不派；ev_gate 保留提问通道）。用字面量不用 PROTOCOL_TOOLS 展开——ev_wait/ev_todo 不授给 reviewer
 const REVIEWER_PI_TOOLS = ["read", "ls", "find", "grep", "ar_read", "ev_done", "ev_fail", "ev_gate"];
@@ -380,7 +384,7 @@ export async function daemonLoop(opts: DaemonOptions = {}): Promise<void> {
   for (;;) {
     try {
       for (const { rootId, path, spec, resumed } of pendingNodes()) {
-        if (running.size >= MAX_WORKERS || running.has(spec.id)) continue;
+        if (running.size >= GLOBAL_MAX_WORKERS || running.has(spec.id)) continue;
         spawnWorker(rootId, path, spec, !!resumed);
       }
       if (opts.once && running.size === 0 && pendingNodes().length === 0) break;
