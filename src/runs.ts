@@ -99,20 +99,22 @@ export function appendEvent(rootId: string, path: string, rec: Omit<EventRecord,
   appendFileSync(join(nodeDir(rootId, path), "events.jsonl"), line + "\n", "utf8");
 }
 
-export interface UsageFile {
-  tokens: number;                        // 全部 turn 的 usage.totalTokens 累加
-  byTurn: { i: number; tokens: number }[];
+export interface UsageTurn {
+  i: number;                 // turn 序号（同一次拉起内从 1 开始）
+  attempt?: number;          // S20：第几次拉起（fallback 重试会从 1 重来，账仍是累计的）
+  at?: string;
+  in?: number | null;        // provider 没报分项时记 null，不编数
+  out?: number | null;
+  cache?: number | null;
+  ms?: number;
+  tokens: number;            // 该 turn 合计（有 totalTokens 用它，否则 in+out）
 }
 
-/** G7 spent 聚合面：stdout 转写器在 turn_end 时按 message.usage.totalTokens 累加写 usage.json */
-export function addUsage(rootId: string, path: string, turn: number, tokens: number): void {
-  const file = join(nodeDir(rootId, path), "usage.json");
-  let cur: UsageFile;
-  try { cur = readJson<UsageFile>(file) ?? { tokens: 0, byTurn: [] }; }
-  catch { cur = { tokens: 0, byTurn: [] }; }
-  cur.tokens += tokens;
-  cur.byTurn.push({ i: turn, tokens });
-  writeJson(file, cur);
+export interface UsageFile {
+  tokens: number;                        // 兼容旧字段：全部 turn 的 tokens 累加
+  byTurn: { i: number; tokens: number }[];
+  turns?: UsageTurn[];                   // S20：turn 级账本（由 transcribe.ts 原子写，无 addUsage）
+  total?: { in: number; out: number; cache: number };
 }
 
 /** ev_gate：节点目录写 gate.json（workbench inbox 投影读它），并记一条 gate 事件（尾事件 hint 即问题） */

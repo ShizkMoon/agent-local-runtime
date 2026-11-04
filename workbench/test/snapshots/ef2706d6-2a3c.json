@@ -18,7 +18,8 @@
     "state": "running",
     "reason": null,
     "code": null
-   }
+   },
+   "compactions": []
   }
  ],
  "inbox": [],

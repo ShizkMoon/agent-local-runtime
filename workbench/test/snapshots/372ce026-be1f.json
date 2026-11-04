@@ -36,8 +36,8 @@
       "ref=artifacts/ad-fa7cd7db.txt",
       "{\"version\":\"2.6\",\"ok\":true,\"command\":\"list-apps\",\"data\":{\"apps\":[{\"name\":\"Weixin.exe\",\"pid\":13436,\"presentation\":\"foreground\",\"process_instance\":\"windows-proc-v1:13438165892:1793044\"},{\"name\":\"WindowsTerminal.exe\",\"pid\":15468,\"presentation\":\"foreground\",\"process_instanc…"
      ],
-     "total": 2,
-     "truncated": false,
+     "total": null,
+     "truncated": true,
      "capped": true,
      "ref": "artifacts/ad-fa7cd7db.txt",
      "ts": "2026-11-03T20:55:26.412Z",
@@ -67,7 +67,8 @@
     "state": "completed",
     "reason": "agent_desktop list-apps 返回 4 个运行中应用（Weixin.exe、WindowsTerminal.exe、ego.exe、msedge.exe），原始输出见 artifacts/ad-fa7cd7db.txt",
     "code": 0
-   }
+   },
+   "compactions": []
   }
  ],
  "inbox": [],

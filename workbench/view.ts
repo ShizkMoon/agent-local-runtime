@@ -37,11 +37,11 @@ export interface StepView {
   ms: number | null;
   /** 输出前 N 行（N=opts.stepLines，默认 40，与 UI 展开上限一致） */
   out: string[];
-  /** 可得输出的总行数（不是"全部输出"——见 capped） */
-  total: number;
-  /** total > out.length：UI 必须显示"还有 N 行" */
+  /** 可得输出的总行数；**源事件已是预览（capped）时为 null** —— 不知道就说不知道（P12） */
+  total: number | null;
+  /** 看到的不等于全部：capped，或 total 已知且大于 out.length */
   truncated: boolean;
-  /** 源事件本身是预览截断（输出以 … 结尾）：全文不在 events.jsonl 里 */
+  /** 源事件本身是预览截断（输出以 … 结尾 / 事件标了 truncated）：全文不在 events.jsonl 里 */
   capped: boolean;
   /** 大输出落盘引用（artifacts/xxx），来自输出首行的 ref= */
   ref: string | null;
@@ -53,6 +53,16 @@ export interface StepView {
 
 /** turn 结局闭集（A9）：max-tokens 压过 completed；interrupted 由"有 spawn 无 exit"合成 */
 export type TurnState = "running" | "completed" | "max-tokens" | "interrupted" | "cancelled" | "failed";
+
+/** 一次上下文压缩（S20 / A8）：compaction_start / summary / end 合成一条 */
+export interface CompactionView {
+  /** 结束事件（没有 end 就用 start）的时间戳 */
+  at: string;
+  /** 压缩前 tokens；事件没给就是 null（不拿"当前累计"冒充） */
+  before_tokens: number | null;
+  /** 压缩后 tokens；没给就是 null */
+  after_tokens: number | null;
+}
 
 export interface TurnView {
   state: TurnState;
@@ -89,6 +99,8 @@ export interface TreeNodeView {
   /** 等待对象：person:answer / dependency */
   wb: string;
   turn: TurnView;
+  /** S20：该节点发生过的上下文压缩（compaction 三事件投影） */
+  compactions: CompactionView[];
 }
 
 export interface RunView {
@@ -108,6 +120,8 @@ export interface RunView {
   steps: StepView[];
   /** 根节点 turn 结局 */
   turn: TurnView;
+  /** S20：根节点发生过的压缩（子节点的在 tree[].compactions 上） */
+  compactions: CompactionView[];
 }
 
 export interface InboxItem {
@@ -302,6 +316,15 @@ function refOf(raw: string): string | null {
   return m ? m[1] : null;
 }
 
+/** 按候选键名取第一个有限数值（不同写入器/工具的字段名不一致） */
+function firstNum(o: any, keys: string[]): number | null {
+  for (const k of keys) {
+    const v = o?.[k];
+    if (typeof v === "number" && Number.isFinite(v)) return v;
+  }
+  return null;
+}
+
 interface Draft {
   kind: StepKind;
   name: string;
@@ -317,12 +340,17 @@ interface Draft {
   ended: boolean;
   /** 已收到的 end 事件数（双写来源去重：只有第一次生效） */
   ends: number;
+  /** 事件里显式给的"总数"（totalLines/totalChars/…）；没有就 null */
+  explicitTotal: number | null;
+  /** 事件自己声明了截断（data.truncated === true） */
+  cappedFlag: boolean;
 }
 
 function draft(i: number, ts: unknown, kind: StepKind, name: string, args: unknown, callId: string | null): Draft {
   return {
     kind, name, args: oneLine(args, 160), ts: String(ts ?? ""), i, call_id: callId,
     raw: "", partial: "", ms: null, exit: null, isErr: false, ended: false, ends: 0,
+    explicitTotal: null, cappedFlag: false,
   };
 }
 
@@ -330,8 +358,11 @@ function finish(dr: Draft, lines: number, live: boolean): StepView {
   const raw = dr.ended ? dr.raw : (dr.partial || dr.raw);
   const all = raw.replace(/\r\n/g, "\n").split("\n");
   while (all.length && !all[all.length - 1].trim()) all.pop();
-  const total = all.length;
   const out = all.slice(0, lines);
+  // P12 诚实性：源事件已是预览（以 … 结尾 / 事件标了 truncated）时，事件里的行数不是"总数" → total 记 null，
+  // 绝不用"我手里有多少"冒充"一共多少"。
+  const capped = dr.cappedFlag || /…$/.test(raw.trimEnd());
+  const total = dr.explicitTotal ?? (capped ? null : all.length);
   const st: StepStatus = dr.ended ? (dr.isErr ? "err" : "ok") : (live ? "run" : "lost");
   return {
     kind: dr.kind,
@@ -342,8 +373,8 @@ function finish(dr: Draft, lines: number, live: boolean): StepView {
     ms: dr.ms,
     out,
     total,
-    truncated: total > out.length,
-    capped: /…$/.test(raw.trimEnd()),
+    truncated: capped || (total !== null && total > out.length),
+    capped,
     ref: refOf(raw),
     ts: dr.ts,
     i: dr.i,
@@ -391,6 +422,10 @@ export function buildSteps(events: EvLine[], opts: { lines?: number; live?: bool
     // file_edit 已写入 diff 时把工具输出接在后面，不覆盖已有事实
     target.raw = [target.raw, out].filter(Boolean).join("\n");
     target.exit = exitOf(d, target.raw);
+    // P12：事件显式给的总数 / 显式截断标记（有就采信，没有就不编）
+    const explicit = firstNum(d, ["totalLines", "total_lines", "totalChars", "total_chars", "total_rows", "total"]);
+    if (explicit !== null) target.explicitTotal = explicit;
+    if (d?.truncated === true || d?.capped === true) target.cappedFlag = true;
   };
 
   for (const { i, ev } of events) {
@@ -448,6 +483,43 @@ export function buildSteps(events: EvLine[], opts: { lines?: number; live?: bool
     }
   }
   return drafts.map(dr => finish(dr, lines, live));
+}
+
+// ---------------------------------------------------------------- S20：压缩投影
+
+const COMPACT_BEFORE_START = ["before_tokens", "tokensBefore", "beforeTokens", "tokenCount", "before", "tokens"];
+const COMPACT_BEFORE_END = ["before_tokens", "tokensBefore", "beforeTokens", "before"];
+const COMPACT_AFTER = ["after_tokens", "tokensAfter", "afterTokens", "after", "summaryTokens", "tokens", "tokenCount"];
+
+/**
+ * 把 pi 的压缩事件投影成一条条 CompactionView。pi 发三件：
+ *   compaction_start（开压前）→ compaction_summary（摘要文本）→ compaction_end（压完）。
+ * 也兼容 kind:"compaction" 单事件（没有 phase）与 data.phase 写法。
+ * 原则：只报事件里说过的事；before/after 拿不到就是 null——不拿"当前累计"顶替。
+ */
+export function compactionsOf(events: EvLine[]): CompactionView[] {
+  const out: CompactionView[] = [];
+  let open: { at: string; before: number | null } | null = null;
+  for (const { ev } of events) {
+    const kind = String(ev?.kind ?? "");
+    if (!kind.startsWith("compaction")) continue;
+    const d = ev?.data ?? {};
+    const at = String(ev?.ts ?? "");
+    const phase = String(d.phase ?? kind.slice("compaction".length).replace(/^_/, ""));
+    if (phase === "start") { open = { at, before: firstNum(d, COMPACT_BEFORE_START) }; continue; }
+    if (phase === "summary") { if (!open) open = { at, before: null }; open.at = at; continue; }
+    // "end" 或单事件：完整记录。
+    // end 事件里的裸 tokens/tokenCount 视为"压缩后"——不拿它覆盖 start 记下的 before。
+    out.push({
+      at: at || open?.at || "",
+      before_tokens: firstNum(d, COMPACT_BEFORE_END) ?? open?.before ?? null,
+      after_tokens: firstNum(d, COMPACT_AFTER),
+    });
+    open = null;
+  }
+  // 只有 start 没有 end：压缩没走完，after 如实记 null（不许四舍五入成"压缩成功"）
+  if (open) out.push({ at: open.at, before_tokens: open.before, after_tokens: null });
+  return out;
 }
 
 // ---------------------------------------------------------------- S17：turn 结局
@@ -537,6 +609,16 @@ interface NodeProj {
   el: string;
   ev: any | null;
   turn: TurnView;
+  compactions: CompactionView[];
+}
+
+/** usage.json → 累计 tokens：旧字段 tokens 优先，没有就按分项相加（与 transcribe.usageTokens 同规则） */
+function usageSpent(u: any): number | null {
+  if (!u) return null;
+  const t = Number(u.tokens);
+  if (Number.isFinite(t) && t > 0) return t;
+  const sum = ["in", "out", "cache"].reduce((s, k) => s + (Number(u.total?.[k]) || 0), 0);
+  return sum > 0 ? sum : null;
 }
 
 function projectNode(runsDir: string, rootId: string, path: string, now: number, stepLines: number): NodeProj {
@@ -563,7 +645,7 @@ function projectNode(runsDir: string, rootId: string, path: string, now: number,
     // S10 控制面投影：live=worker.json 租约在、cur=尾事件工具/动作、spent=token 累计、wait=waiting 原因
     live,
     cur: ev?.data?.tool ?? ev?.kind ?? null,
-    spent: usage?.tokens ?? r?.spent?.tokens ?? null,
+    spent: usageSpent(usage) ?? r?.spent?.tokens ?? null,
     todo: Array.isArray(todo?.items) ? todo.items : null, // S9 ev_todo 清单投影
     wait: r?.status === "waiting" ? (gate?.question ?? (Array.isArray(r?.wait_on) ? `等子节点 ${r.wait_on.join(", ")}` : r?.wait_on) ?? null) : null,
     nm: nodeName(runsDir, rootId, path),
@@ -574,6 +656,7 @@ function projectNode(runsDir: string, rootId: string, path: string, now: number,
     el: mmss((r?.finished_at ? Date.parse(r.finished_at) : now) - created),
     ev,
     turn: projectTurn(events, r, live),
+    compactions: compactionsOf(events),   // S20：压缩可见（三事件合成）
   };
 }
 
@@ -622,6 +705,7 @@ export function buildView(runsDir: string, opts: ViewOptions = {}): ViewPayload 
         live: n.live, cur: n.cur, spent: n.spent, wait: n.wait, todo: n.todo, // S10：live ✕ / Σtok / 回复框；S9：清单
         wb: n.st === "input" ? "person:answer" : n.st === "dep" ? "dependency" : "", // wb=等待对象：等人答/等依赖
         turn: n.turn,
+        compactions: n.compactions,
       }));
     // arts：全部节点 artifacts/ 汇总到 run 级；非 root 节点的 fn 带 path 前缀防重名
     const arts: ArtView[] = [];
@@ -654,6 +738,7 @@ export function buildView(runsDir: string, opts: ViewOptions = {}): ViewPayload 
       chips, tree, arts,
       steps: rootNode?.steps ?? [],                                      // S17：Run 详情工具时间线
       turn: runTurn,
+      compactions: rootNode?.compactions ?? [],                          // S20：根节点的压缩记录
     });
     // inbox：waiting 节点 → 人工闸门条目（gate.run 指回 runs 数组下标）
     for (const n of waiting) {

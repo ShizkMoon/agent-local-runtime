@@ -5,7 +5,7 @@ import { appendFileSync, existsSync, readFileSync, mkdirSync, copyFileSync, writ
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { pendingNodes, appendEvent, readResult, writeResult, patchResult, writeSpec, writeWorker, clearWorker, abortWorker, nodeDir, RUNS_DIR, STATE } from "./runs.ts";
-import { tapStdout } from "./transcribe.ts";
+import { tapStdout, readUsage, usageTokens, type UsageLedger } from "./transcribe.ts";
 import type { SpecEnvelope } from "./envelope.ts";
 
 const POLL_MS = Number(process.env.AR_POLL_MS ?? 2000);
@@ -241,6 +241,30 @@ function runNodeSettledHook(rootId: string, path: string, spec: SpecEnvelope): v
   }
 }
 
+// S20：tokens 预算 —— 在 turn 边界判定（usage.json 刚落账时），超限即中止并留下证据。
+// 依赖以参数注入：测试可以塞 fake append/abort/patch 断言"事件写了、abort 被调用"。
+export interface BudgetDeps {
+  append: (rec: { kind: string; data: Record<string, unknown> }) => void;
+  abort: (summary: string) => void;
+  /** 落盘 result.reason（ResultEnvelope 类型还没这个字段，S20 先按宽松形状写） */
+  patch: (p: { reason?: string; summary?: string }) => void;
+}
+
+/** @returns "no-budget" 未配预算 / "ok" 未超 / "exceeded" 已超并已中止 */
+export function enforceTokenBudget(
+  budget: { tokens?: number } | null | undefined,
+  spent: number,
+  deps: BudgetDeps,
+): "no-budget" | "ok" | "exceeded" {
+  const limit = Number(budget?.tokens);
+  if (!Number.isFinite(limit) || limit <= 0) return "no-budget";   // 未配置 = 不拦（不由 0 触发）
+  if (spent <= limit) return "ok";
+  deps.append({ kind: "budget", data: { limit, spent } });
+  deps.abort(`budget exceeded：已用 ${spent} / 上限 ${limit} tokens（turn 边界中止）`);
+  deps.patch({ reason: "budget exceeded" });
+  return "exceeded";
+}
+
 function spawnWorker(rootId: string, path: string, spec: SpecEnvelope, resumed = false, retried = false): void {
   const dir = nodeDir(rootId, path);
   running.add(spec.id);
@@ -259,12 +283,12 @@ function spawnWorker(rootId: string, path: string, spec: SpecEnvelope, resumed =
   let settled = false;
   let killTimer: NodeJS.Timeout | undefined;
   // S6 spent 兜底：worker 没报 spent 就用转写器累计的 usage.json 回填；挂在 close（stdout 已 flush 落账）而非 exit
+  // S20：账本 total 优先（usageTokens 内部：tokens 字段 → total.in+out+cache 回落），对外 spent 形状不变
   const backfillSpent = (): void => {
     try {
       const r = readResult(rootId, path);
       if (!r || r.spent) return;
-      const u = JSON.parse(readFileSync(join(dir, "usage.json"), "utf8"));
-      const tokens = Number(u?.tokens) || 0;
+      const tokens = usageTokens(readUsage(dir));
       if (!tokens) return;
       patchResult(rootId, path, { spent: { tokens, minutes: +((Date.now() - t0) / 60_000).toFixed(1) } });
     } catch { /* 无 usage.json / 读失败就跳过 */ }
@@ -297,7 +321,18 @@ function spawnWorker(rootId: string, path: string, spec: SpecEnvelope, resumed =
   };
   try {
     const child = spawn(file, args, { cwd: dir, stdio: ["ignore", "pipe", "pipe"], env: workerEnv(rootId, path), windowsHide: true });
-    tapStdout(child, dir, rootId, path);   // stdout → stdout.log 全量 + events.jsonl 增量转写
+    // S20 tokens 预算：turn 边界（usage.json 刚落账）判定，超限 → budget 事件 + abort（result.summary/reason 记 budget exceeded）
+    let budgetHit = false;
+    const guardBudget = (ledger: UsageLedger): void => {
+      if (budgetHit) return;
+      const res = enforceTokenBudget(spec.budget, usageTokens(ledger), {
+        append: (rec) => appendEvent(rootId, path, rec),
+        abort: (summary) => { budgetHit = true; abortWorker(rootId, path, summary); },
+        patch: (p) => { patchResult(rootId, path, p); },
+      });
+      if (res === "exceeded") indexLog({ event: "budget_exceeded", root_id: rootId, node: spec.id, spent: usageTokens(ledger), limit: spec.budget?.tokens });
+    };
+    tapStdout(child, dir, rootId, path, { onTurn: guardBudget });   // stdout → stdout.log 全量 + events.jsonl 增量转写
     // worker.json 租约锁：pendingNodes 见 live 锁即跳过（防 daemon 崩溃重启后重复拉起同一会话）
     writeWorker(rootId, path, { pid: child.pid ?? -1, started_at: new Date().toISOString(), cmd: desc });
     // budget.minutes 超时：到点走同 abort 路径（taskkill 树 + 幂等 failed result），summary 记 timeout

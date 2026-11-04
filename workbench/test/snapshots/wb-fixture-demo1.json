@@ -98,7 +98,8 @@
       "state": "completed",
       "reason": "接口清单已产出：artifacts/接口清单.md（envelope + runs 共 8 个导出）",
       "code": 0
-     }
+     },
+     "compactions": []
     },
     {
      "l": 2,
@@ -121,7 +122,8 @@
       "state": "failed",
       "reason": "Worker 异常退出（code -1）：Error: spawn claude ENOENT——详见节点 events.jsonl",
       "code": -1
-     }
+     },
+     "compactions": []
     },
     {
      "l": 2,
@@ -163,7 +165,8 @@
       "state": "failed",
       "reason": "输入 ref 未物化到节点目录，read 失败退出",
       "code": 1
-     }
+     },
+     "compactions": []
     }
    ],
    "arts": [
@@ -178,7 +181,8 @@
     "state": "failed",
     "reason": "Worker 异常退出（code -1）：Error: spawn claude ENOENT——详见节点 events.jsonl",
     "code": -1
-   }
+   },
+   "compactions": []
   }
  ],
  "inbox": [],
