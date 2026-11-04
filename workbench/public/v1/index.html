@@ -308,6 +308,17 @@ button:focus:not(:focus-visible){outline:none}
 .tnode:hover .tn-go{opacity:1}
 .tn-go:hover{background:var(--hov);color:var(--t1)}
 .tn-go svg{width:14px;height:14px}
+/* live 节点行尾 ✕ 中止钮：常驻但安静，悬停才上色 */
+.tn-x{
+  position:absolute;right:30px;top:50%;transform:translateY(-50%);
+  width:20px;height:20px;border-radius:var(--r-ctl);
+  display:flex;align-items:center;justify-content:center;color:var(--t3);
+  font-size:13px;line-height:1;opacity:.55;
+  transition:opacity var(--t-ui) var(--e),background var(--t-ui) var(--e),color var(--t-ui) var(--e);
+}
+.tnode:hover .tn-x{opacity:1}
+.tn-x:hover{background:var(--hov);color:var(--fig)}
+.tnode.live .tn-row{padding-right:56px}
 
 /* 子代理页 —— 节点 / 产物点击右侧滑出 */
 .scrim{position:fixed;inset:0;z-index:40;background:rgba(20,15,10,.28)}
@@ -349,6 +360,33 @@ button.stp-h:hover{background:var(--hov)}
 .stp.open .chev{transform:rotate(90deg)}
 .stp-out{display:none;margin:0 4px 10px 26px}
 .stp.open .stp-out{display:block}
+
+/* ev_todo 清单 —— sheet 里的 checklist，done 划线 */
+.todo{list-style:none;border-top:1px solid var(--ln)}
+.todo li{display:flex;align-items:baseline;gap:8px;padding:6px 2px;border-bottom:1px solid var(--ln);font-size:13px;color:var(--t2)}
+.todo .ck{width:14px;flex:none;text-align:center;font-size:12px;color:var(--t3)}
+.todo li.done{color:var(--t3)}
+.todo li.done .ck{color:var(--ok)}
+.todo li.done .tt{text-decoration:line-through}
+
+/* sheet 顶部的节点回复行（live 节点）：与 inbox opt 同款发丝线控件 */
+.sh-reply{display:flex;gap:6px;margin-bottom:14px}
+.sh-reply input{
+  flex:1;min-width:0;height:30px;padding:0 10px;
+  font:inherit;font-size:12.5px;color:var(--t1);
+  background:transparent;border:1px solid var(--ln);border-radius:var(--r-ctl);outline:none;
+}
+.sh-reply input:focus{border-color:var(--ln-hi)}
+.sh-reply input::placeholder{color:var(--t3)}
+/* transcript 折叠头：与 sh-sec 同层级文字，chev 旋转向下 */
+.sh-tr-h{
+  display:flex;align-items:center;gap:6px;width:100%;
+  font-size:12px;color:var(--t3);margin:20px 0 6px;padding:2px 0;
+  transition:color var(--t-ui) var(--e);
+}
+.sh-tr-h:hover{color:var(--t1)}
+.sh-tr-h .chev{width:12px;height:12px;color:var(--t3);transition:transform var(--t-med) var(--e)}
+.sh-tr-h.open .chev{transform:rotate(90deg)}
 
 /* ============ composer（s3，radius 14 —— 全场最圆 + 唯一阴影）—— 纯输入 ============ */
 .composer-zone{flex:none;padding:0 24px 14px;max-width:764px;margin:0 auto;width:100%}
@@ -597,6 +635,32 @@ function connectSSE(){
   es.onerror = function(){ startPoll(); };  /* EventSource 自带重连；重连成功 onopen 停轮询 */
 }
 
+/* ---------- OS 通知（S13/G17）：inbox 出现新条目 → Notification("aica", body=问题首行)。
+   首拉只记录基线不弹；permission=default 时在首次交互/加载时申请一次 ---------- */
+var notifiedInboxIds = null;   /* null=未建基线；之后为已见过的 inbox id 集合 */
+function notifyAskPermission(){
+  try{
+    if("Notification" in window && Notification.permission === "default") Notification.requestPermission();
+  }catch(e){}
+}
+function notifyNewInbox(){
+  var seen = {};
+  INBOX.forEach(function(c){ if(c && c.id != null) seen[c.id] = 1; });
+  if(notifiedInboxIds === null){ notifiedInboxIds = seen; return; }  /* 首拉建基线，不轰炸 */
+  var fresh = INBOX.filter(function(c){ return c && c.id != null && !notifiedInboxIds[c.id]; });
+  notifiedInboxIds = seen;
+  if(!fresh.length) return;
+  try{
+    if(!("Notification" in window)) return;
+    if(Notification.permission === "default"){ Notification.requestPermission(); return; } /* 批下来后下轮再弹 */
+    if(Notification.permission !== "granted") return;
+    fresh.forEach(function(c){
+      var body = String(c.t || c.d || "").split("\n")[0].slice(0, 120);
+      try{ new Notification("aica", { body: body }); }catch(e){}
+    });
+  }catch(e){}
+}
+
 /* ---------- view 应用：保选中 run（按 id）、保展开态、滤掉已裁决 ---------- */
 function applyView(d){
   var prevId = (RUNS[currentRun]||{}).id;
@@ -612,6 +676,7 @@ function applyView(d){
   RUNS    = Array.isArray(d.runs)    ? d.runs    : [];
   INBOX   = (Array.isArray(d.inbox) ? d.inbox : []).filter(function(c){ return !(c && resolvedIds[c.id]); });
   SETTLED = Array.isArray(d.settled) ? d.settled : [];
+  notifyNewInbox();
 
   RUNS.forEach(function(r){
     if(!Array.isArray(r.tree))  r.tree  = [];
@@ -659,7 +724,7 @@ function renderSidebar(){
   $("#runList").innerHTML = live.length ? live.map(function(p){
     var r = p[0], i = p[1];
     return '<button class="run-card'+(i===currentRun?' on':'')+'" data-run="'+i+'">'+
-      '<span class="r1">'+pillOf(r.status)+'<span class="dur num">'+esc(r.dur)+'</span></span>'+
+      '<span class="r1">'+pillOf(r.status)+'<span class="dur num">'+esc(r.dur)+(r.spent?' · Σ'+fmtTok(r.spent):'')+'</span></span>'+
       '<span class="ttl">'+esc(r.title)+'</span>'+
       '<span class="meta">'+esc(r.snippet)+'</span></button>';
   }).join("") : '<div class="empty-note">暂无运行中的任务</div>';
@@ -707,20 +772,33 @@ function aclHtml(c){
   return '<div class="acl" data-s="'+esc(s)+'"><span class="g">'+g+'</span><span class="tx">'+esc(c[1])+'</span></div>';
 }
 function stLabel(st){ return ST_LABEL[st]||""; }
+function fmtTok(n){ n=+n||0; return n>=1000 ? (n/1000).toFixed(1).replace(/\.0$/,"")+"k" : String(n); }
 function stWord(n){
   if(n.st==="input") return '<span class="tn-st await">等你回复</span>';
   var t = stLabel(n.st);
+  if(n.live && n.cur) t += " · "+n.cur;        /* live 节点：尾事件工具/动作名 */
   if(n.el) t += " · "+n.el;
+  if(n.spent) t += " · Σ"+fmtTok(n.spent);     /* usage.json token 累计 */
   return '<span class="tn-st">'+esc(t)+'</span>';
 }
-/* 行 = 选中 / 展开下级；› = 详情；点 = 就地展开（中栏与页签共用一套） */
+/* 节点控制动作：POST /api/runs/<run>/node/<path>/<act>；当前 run + 节点 path 定位 */
+function nodePost(n, act, body){
+  var run = RUNS[currentRun]||{};
+  var np = nodePathOf(n);
+  if(!run.id || !np) return Promise.reject(new Error("no node"));
+  return fetch("/api/runs/"+encodeURIComponent(run.id)+"/node/"+encPath(np)+"/"+act,
+    {method:"POST", headers:{"content-type":"application/json"}, body:JSON.stringify(body||{})})
+    .then(function(r){ if(!r.ok) throw new Error("HTTP "+r.status); return r.json(); });
+}
+/* 行 = 选中 / 展开下级；› = 详情；点 = 就地展开；✕ = live 节点中止（中栏与页签共用一套） */
 function tnodeHtml(n, last, lvl, has){
   lvl = lvl || n.l;
-  return '<div class="tnode l'+lvl+(last?" last":"")+'" data-nm="'+esc(n.nm)+'">'+
+  return '<div class="tnode l'+lvl+(last?" last":"")+(n.live?" live":"")+'" data-nm="'+esc(n.nm)+'">'+
     '<button class="tn-row"><span class="dot '+esc(n.st)+(has?' x':'')+'"></span>'+
     '<span class="tn-main"><span class="tn-t"><span class="nm">'+esc(n.nm)+'</span></span>'+
     '<span class="tn-d">'+esc(n.d||"")+'</span></span>'+stWord(n)+'</button>'+
-    '<button class="tn-go" aria-label="查看详情">'+CHEV+'</button></div>';
+    '<button class="tn-go" aria-label="查看详情">'+CHEV+'</button>'+
+    (n.live?'<button class="tn-x" title="中止该节点" aria-label="中止该节点">×</button>':"")+'</div>';
 }
 /* 递归渲染：展开状态的节点把子代理挂在行下，父级脊线用 kid-grp 延续 */
 function grpHtml(tree,kids,lvl){
@@ -796,6 +874,15 @@ function renderRun(silent){
       if(n) openSheetFor(n);
     });
   });
+  each("#tree .tn-x",function(el){
+    el.addEventListener("click",function(e){
+      e.stopPropagation();
+      var n = findNode(RUNS[currentRun].tree, el.parentElement.dataset.nm);
+      if(!n) return;
+      el.disabled = true;
+      nodePost(n,"abort").then(scheduleFetch).catch(function(){ el.disabled = false; });
+    });
+  });
 }
 function selectRun(i){
   currentRun = i;
@@ -864,23 +951,64 @@ function loadArtifact(a, node){
     .then(function(t){ var e2=$("#shArt"); if(e2) e2.textContent = t; })
     .catch(function(){ var e2=$("#shArt"); if(e2) e2.textContent = "（读取失败：服务端未找到该产物）"; });
 }
+/* transcript 行：msg=· / tool=✓× / event=kind 名；复用 .steps 行样式 */
+function trHtml(e){
+  var t = String(e.ts||"").slice(11,19);
+  var g="·", st="", a="", r="";
+  if(e.type==="msg"){ g="<i></i>"; a="message"; r=e.text||""; }
+  else if(e.type==="tool"){ st=e.data&&e.data.isError?"err":"ok"; g=st==="err"?"×":"✓";
+    a=e.tool||"tool"; r=(e.data&&(e.data.result||e.data.args))||""; }
+  else { a=e.kind||"event"; r=e.text||""; }
+  return '<li class="stp" data-s="'+st+'"><div class="stp-h"><span class="sg">'+g+'</span>'+
+    '<span class="sa"><b>'+esc(a)+'</b>'+(r?'<span>'+esc(String(r).slice(0,300))+'</span>':"")+'</span>'+
+    '<span class="tm num">'+esc(t)+'</span><span class="chev"></span></div></li>';
+}
+/* sheet 底部 transcript 折叠：点开才拉 GET .../transcript，全量 msg/tool 流 */
+function loadTranscript(n){
+  var box = $("#shTrBody"); if(!box) return;
+  var run = RUNS[currentRun]||{}, np = nodePathOf(n);
+  box.hidden = false;
+  if(!run.id || !np){ box.innerHTML = '<div class="empty-note">（无法定位节点）</div>'; return; }
+  box.innerHTML = '<div class="empty-note">载入中…</div>';
+  fetch("/api/runs/"+encodeURIComponent(run.id)+"/node/"+encPath(np)+"/transcript", {cache:"no-store"})
+    .then(function(r){ if(!r.ok) throw new Error("HTTP "+r.status); return r.json(); })
+    .then(function(d){
+      var items = d.transcript||[];
+      var el = $("#shTrBody"); if(!el) return;
+      el.innerHTML = items.length ? '<ol class="steps">'+items.map(trHtml).join("")+'</ol>'
+                                  : '<div class="empty-note">无事件记录</div>';
+    })
+    .catch(function(e){ var el=$("#shTrBody"); if(el) el.innerHTML='<div class="empty-note">载入失败：'+esc(e.message||e)+'</div>'; });
+}
 function openSheetFor(n, from){
   var isArt = !!(n.fn && !n.nm), body;
   var meta = isArt ? esc(n.sz||"")
-    : '<span class="dot '+esc(n.st)+'"></span>'+esc([stLabel(n.st), n.el, n.wb&&WB_LABEL[n.wb] ? "等"+WB_LABEL[n.wb] : ""].filter(Boolean).join(" · "));
+    : '<span class="dot '+esc(n.st)+'"></span>'+esc([stLabel(n.st), n.el,
+        n.wait ? "等："+String(n.wait).slice(0,40) : n.wb&&WB_LABEL[n.wb] ? "等"+WB_LABEL[n.wb] : ""].filter(Boolean).join(" · "));
   if(isArt){
     if(n.pv) body = n.pv;                                             /* 服务端若给预览片段直接用 */
     else if(n.body!=null) body = '<pre class="sh-log">'+esc(n.body)+'</pre>';
     else body = '<pre class="sh-log" id="shArt"></pre>';              /* 否则走后端 artifact 接口 */
   }else{
-    body = '<p class="sh-sum">'+esc(nodeSum(n))+'</p>';
+    body = "";
+    if(n.live) body += '<div class="sh-reply"><input id="shRp" placeholder="回复该节点…（进 spec.reply，下轮可见）" enterkeyhint="send">'+
+      '<button class="opt solid" id="shRpGo">发送</button></div>';    /* live 节点：直达 reply 通道 */
+    body += '<p class="sh-sum">'+esc(nodeSum(n))+'</p>';
+    /* S9 ev_todo 清单：done 划线，全量覆盖投影 */
+    if(Array.isArray(n.todo) && n.todo.length) body += '<div class="sh-sec">清单</div><ol class="todo">'+n.todo.map(function(it){
+      var dn = !!(it && it.done);
+      return '<li'+(dn?' class="done"':'')+'><span class="ck">'+(dn?'✓':'○')+'</span><span class="tt">'+esc(it&&it.text||"")+'</span></li>';
+    }).join("")+'</ol>';
     if(Array.isArray(n.steps) && n.steps.length) body += '<div class="sh-sec">执行过程</div><ol class="steps">'+n.steps.map(stepHtml).join("")+'</ol>';
     if(Array.isArray(n.out) && n.out.length) body += '<div class="sh-sec">产出</div>'+n.out.map(function(fn){
       return '<button class="artl" data-fn="'+esc(fn)+'"><span class="fn">'+esc(fn)+'</span><span class="sz">'+esc((artOf(fn)||{}).sz||"")+'</span></button>';
     }).join("");
+    body += '<button class="sh-tr-h" id="shTr">transcript'+CHEV+'</button><div id="shTrBody" hidden></div>';
   }
   var act = isArt ? '<button class="opt solid" id="shOpen">打开</button>'
-    : n.st==="input" ? '<button class="opt solid" id="shGo">在需要你中处理</button>' : "";
+    : n.st==="input" ? '<button class="opt solid" id="shGo">在需要你中处理</button>'
+    : (n.st==="done"||n.st==="failed") ? '<button class="opt" id="shRetry">⟲ 重跑</button>'
+    : n.live ? '<button class="opt danger" id="shAbort">中止</button>' : "";
   $("#sheet").innerHTML =
     '<div class="sh-h"><div class="sh-tt">'+
       (from?'<button class="sh-back" id="shBack">‹ '+esc(from.nm||from.fn)+'</button>':"")+
@@ -906,6 +1034,39 @@ function openSheetFor(n, from){
   var bk=$("#shBack"); if(bk) bk.addEventListener("click",function(){ openSheetFor(from); });
   var go=$("#shGo"); if(go) go.addEventListener("click",function(){ closeSheet(); focusGate(n.nm); });
   var so=$("#shOpen"); if(so) so.addEventListener("click",function(){ so.textContent="已交给系统打开"; });
+  /* S10 控制面：live 回复行 / done·failed ⟲重跑 / live 中止 / transcript 折叠 */
+  var rp=$("#shRp"), rg=$("#shRpGo");
+  if(rp&&rg){
+    var send=function(){
+      var v=rp.value.trim(); if(!v){ rp.focus(); return; }
+      rg.disabled=true;
+      nodePost(n,"reply",{text:v}).then(function(){ rp.value=""; rg.disabled=false; rg.textContent="已发送"; scheduleFetch(); })
+        .catch(function(){ rg.disabled=false; rg.textContent="重试"; });
+    };
+    rg.addEventListener("click",send);
+    rp.addEventListener("keydown",function(e){ if(e.key==="Enter"){ e.preventDefault(); send(); } });
+  }
+  var rt=$("#shRetry");
+  if(rt) rt.addEventListener("click",function(){
+    rt.disabled=true; rt.textContent="重跑中…";
+    nodePost(n,"retry").then(function(){ rt.textContent="已回队 · 等待拉起"; scheduleFetch(); })
+      .catch(function(e){ rt.disabled=false; rt.textContent="⟲ 重跑（"+(e&&e.message||"失败")+"）"; });
+  });
+  var ab=$("#shAbort");
+  if(ab) ab.addEventListener("click",function(){
+    ab.disabled=true;
+    nodePost(n,"abort").then(function(){ ab.textContent="已中止"; scheduleFetch(); })
+      .catch(function(){ ab.disabled=false; });
+  });
+  var tr=$("#shTr");
+  if(tr) tr.addEventListener("click",function(){
+    var box=$("#shTrBody");
+    if(box.hidden){
+      tr.classList.add("open");
+      if(!tr.dataset.loaded){ tr.dataset.loaded="1"; loadTranscript(n); }
+      else box.hidden=false;
+    }else{ box.hidden=true; tr.classList.remove("open"); }
+  });
 }
 function closeSheet(){
   if($("#sheet").hidden) return;
@@ -955,6 +1116,13 @@ function renderSubs(nd){
   each("#subDock .tn-go",function(el){
     el.addEventListener("click",function(e){ e.stopPropagation();
       var k = findNode(kids, el.parentElement.dataset.nm); if(k) openSheetFor(k); });
+  });
+  each("#subDock .tn-x",function(el){
+    el.addEventListener("click",function(e){ e.stopPropagation();
+      var k = findNode(kids, el.parentElement.dataset.nm); if(!k) return;
+      el.disabled = true;
+      nodePost(k,"abort").then(scheduleFetch).catch(function(){ el.disabled = false; });
+    });
   });
   var bk=$("#subBack"); if(bk) bk.addEventListener("click",function(){ renderSubs(parentOf(tree, nd)); });
 }
@@ -1155,6 +1323,7 @@ renderRun(true);
 renderArts();
 renderSubs(null);
 renderDset();
+notifyAskPermission();   /* S13：加载时申请通知权限（default→ask；已授予/已拒不再问） */
 fetchView();
 connectSSE();
 </script>

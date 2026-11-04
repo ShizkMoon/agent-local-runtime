@@ -1,0 +1,7 @@
+{
+  "id": "node:testr1/root",
+  "finished_at": "2026-11-04T05:27:44.623Z",
+  "status": "done",
+  "summary": "root 节点完成冒烟派发与收口自证（信封可读、工具链可用、sub1=done pong），证据落 artifacts/acceptance.md；live1 sleep forever 需上层超时。",
+  "type": "result"
+}

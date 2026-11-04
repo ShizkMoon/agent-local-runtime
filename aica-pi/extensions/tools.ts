@@ -3,7 +3,7 @@
 // API 依据 pi-coding-agent@1.5.0：registerTool({name,label,description,parameters(TypeBox),
 //   execute(toolCallId, params, signal, onUpdate, ctx) → {content:[{type:"text",text}], details, terminate?}})
 import { execFileSync } from "node:child_process";
-import { writeFileSync, mkdirSync } from "node:fs";
+import { writeFileSync, readFileSync, existsSync, mkdirSync, appendFileSync } from "node:fs";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { Type } from "typebox";
@@ -41,15 +41,47 @@ function spill(content: string, hint: string): string {
   return `ref=artifacts/${name}\n${head}`;
 }
 
+// ---- ev_learn：经验沉淀到 <AICA_STATE>/memory/learned.md（S12，对齐 OMP learned.md 契约） ----
+const LEARN_MAX_ENTRIES = 50;    // 文件 ≤50 条
+const LEARN_ENTRY_CAP = 2000;    // 每条 ≤2000 字
+// 条目格式：`## <iso ts> · sha1:<h10>\n<text>`，段间空行；新→旧（prepend）
+
+function parseLearned(cur: string): { sha: string; block: string }[] {
+  return cur.split(/^## /m).filter((b) => b.trim()).map((b) => {
+    const sha = b.match(/^[^\n]*sha1:(\w+)/)?.[1] ?? "";
+    return { sha, block: "## " + b.trimEnd() };
+  });
+}
+
+/** 新条目 prepend + sha1 去重 + 截 ≤50 条；返回给模型看的回执 */
+function learn(state: string, text: string): string {
+  const dir = join(state, "memory");
+  mkdirSync(dir, { recursive: true });
+  const file = join(dir, "learned.md");
+  const body = text.trim().slice(0, LEARN_ENTRY_CAP);
+  const sha = createHash("sha1").update(body).digest("hex").slice(0, 10);
+  const old = existsSync(file) ? parseLearned(readFileSync(file, "utf8")) : [];
+  if (old.some((e) => e.sha === sha)) return `learned: 已有同内容条目（sha1:${sha}），未重复记录`;
+  const entry = `## ${new Date().toISOString()} · sha1:${sha}\n${body}`;
+  const entries = [entry, ...old.map((e) => e.block)].slice(0, LEARN_MAX_ENTRIES);
+  writeFileSync(file, entries.join("\n\n") + "\n", "utf8");
+  return `learned: 已记录（sha1:${sha}，共 ${entries.length} 条）`;
+}
+
 export default function (pi: any) {
   pi.registerTool({
     name: "ev_done",
     label: "Ev Done",
     description: "任务完成：写 result 并把一句话执行摘要回写任务库。Worker 结束时必须调用。",
-    parameters: Type.Object({ summary: Type.String({ description: "一句话执行摘要，附产物路径" }) }),
+    parameters: Type.Object({
+      summary: Type.String({ description: "一句话执行摘要，附产物路径" }),
+      spent_tokens: Type.Optional(Type.Number({ description: "本次任务累计 token 数（缺省由 daemon 按 usage.json 兜底）" })),
+    }),
     async execute(_id: string, args: any) {
+      const a = ["done", "--summary", args.summary];
+      if (typeof args.spent_tokens === "number" && args.spent_tokens > 0) a.push("--spent-tokens", String(args.spent_tokens));
       // terminate：提示 pi 在本批工具调用后收口，不再多做一轮
-      return ok(ar(["done", "--summary", args.summary]), { terminate: true });
+      return ok(ar(a), { terminate: true });
     },
   });
 
@@ -57,9 +89,14 @@ export default function (pi: any) {
     name: "ev_fail",
     label: "Ev Fail",
     description: "任务失败：写 result 并上报失败原因。",
-    parameters: Type.Object({ summary: Type.String() }),
+    parameters: Type.Object({
+      summary: Type.String(),
+      spent_tokens: Type.Optional(Type.Number({ description: "本次任务累计 token 数（缺省由 daemon 按 usage.json 兜底）" })),
+    }),
     async execute(_id: string, args: any) {
-      return ok(ar(["fail", "--summary", args.summary]), { terminate: true });
+      const a = ["fail", "--summary", args.summary];
+      if (typeof args.spent_tokens === "number" && args.spent_tokens > 0) a.push("--spent-tokens", String(args.spent_tokens));
+      return ok(ar(a), { terminate: true });
     },
   });
 
@@ -76,6 +113,49 @@ export default function (pi: any) {
       if (args.options?.length) a.push("--opts", args.options.join(";"));
       // terminate：节点已挂起等人工，提示 pi 收口本轮
       return ok(ar(a), { terminate: true });
+    },
+  });
+
+  pi.registerTool({
+    name: "ev_wait",
+    label: "Ev Wait",
+    description: "挂起等子节点：paths 填子节点 path 列表（如 ['root/a','root/b']）。全部 done 后系统自动复活本节点并把各子摘要注入上下文；派完子节点后用它收口，不要轮询。",
+    parameters: Type.Object({ paths: Type.Array(Type.String(), { description: "要等待的子节点 path 列表" }) }),
+    async execute(_id: string, args: any) {
+      // terminate：节点已挂起等 join，提示 pi 收口本轮
+      return ok(ar(["wait", "--on", (args.paths ?? []).join(",")]), { terminate: true });
+    },
+  });
+
+  pi.registerTool({
+    name: "ev_todo",
+    label: "Ev Todo",
+    description: "更新本节点任务清单（checklist 实时投影到工作台）。items 每项 {text, done?}，全量覆盖写；做完一项就重发一次保持投影新鲜。",
+    parameters: Type.Object({
+      items: Type.Array(Type.Object({
+        text: Type.String({ description: "清单项文本" }),
+        done: Type.Optional(Type.Boolean({ description: "是否已完成" })),
+      }), { description: "全量清单（覆盖式）" }),
+    }),
+    async execute(_id: string, args: any) {
+      // 节点目录 = process.cwd()：todo.json + todo 事件都直接落盘（投影走文件态）
+      const items = (args.items ?? []).map((it: any) => ({ text: String(it?.text ?? ""), done: !!it?.done }));
+      const ts = new Date().toISOString();
+      writeFileSync(join(process.cwd(), "todo.json"), JSON.stringify({ items, ts }, null, 2) + "\n", "utf8");
+      appendFileSync(join(process.cwd(), "events.jsonl"), JSON.stringify({ ts, kind: "todo", data: { items } }) + "\n", "utf8");
+      return ok(`清单已更新：${items.length} 项（${items.filter((i: any) => i.done).length} 完成）`);
+    },
+  });
+
+  pi.registerTool({
+    name: "ev_learn",
+    label: "Ev Learn",
+    description: "经验回传：把一条跨任务可复用的经验/坑写进全局 learned.md（新→旧、sha1 去重、≤2000字），后续所有任务的上下文会携带。写「情境→结论」一两句，别写任务细节流水账。",
+    parameters: Type.Object({ text: Type.String({ description: "经验教训正文，≤2000 字" }) }),
+    async execute(_id: string, args: any) {
+      const st = process.env.AICA_STATE;
+      if (!st) return err("AICA_STATE 未设置，无法写 learned.md");
+      return ok(learn(st, String(args.text ?? "")));
     },
   });
 

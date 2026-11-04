@@ -143,9 +143,11 @@ function apiTree(res: any, rootId: string): void {
     const st = nodeStatus(rootId, path);
     // spec.parent 形如 node:<root>/<path> → 取末段做父路径
     const parent = typeof spec?.parent === "string" && spec.parent.includes("/") ? spec.parent.split("/").pop() : (spec?.parent ?? null);
+    const usage = readJson<any>(join(dir, "usage.json"));
     return { path, goal: spec?.goal ?? null, agent: spec?.agent ?? "pi", type: spec?.type ?? null,
              parent, status: st.status, summary: st.summary ?? null, finished_at: st.finished_at ?? null,
-             spent: r?.spent ?? null, events: existsSync(join(dir, "events.jsonl")) ? statSync(join(dir, "events.jsonl")).size : 0 };
+             spent: r?.spent ?? (usage?.tokens ? { tokens: usage.tokens } : null),
+             events: existsSync(join(dir, "events.jsonl")) ? statSync(join(dir, "events.jsonl")).size : 0 };
   });
   json(res, 200, { meta, nodes });
 }
@@ -217,9 +219,12 @@ function depDone(rootId: string, dep: string): boolean {    // depends 写兄弟
   const p = dep.startsWith(`node:${rootId}/`) ? dep.slice(`node:${rootId}/`.length) : dep;
   return readJson<any>(join(RUNS, rootId, "nodes", ...p.split("/"), "result.json"))?.status === "done";
 }
-// tree 的 st 映射：waiting→input / 无 result 且 dep 未满足→dep / 无 result（未拉起或跑着）→queued / blocked→dep
+// tree 的 st 映射：waiting→input（wait_on 挂起=等子节点，归 dep 不进 inbox）/ 无 result 且 dep 未满足→dep / 无 result（未拉起或跑着）→queued / blocked→dep
 function viewStatus(rootId: string, spec: any, r: any): string {
-  if (r) return ({ waiting: "input", done: "done", failed: "failed", blocked: "dep" } as Record<string, string>)[r.status] ?? "done";
+  if (r) {
+    if (r.status === "waiting" && Array.isArray(r.wait_on) && r.wait_on.length) return "dep";   // S7 ev_wait join：自动复活，不占人工位
+    return ({ waiting: "input", done: "done", failed: "failed", blocked: "dep" } as Record<string, string>)[r.status] ?? "done";
+  }
   if (spec?.depends?.length && spec.depends.some((d: string) => !depDone(rootId, d))) return "dep";
   return "queued";
 }
@@ -254,9 +259,18 @@ function apiView(res: any): void {
       }).filter(Boolean);
       const ad = join(dir, "artifacts");
       const out = existsSync(ad) ? readdirSync(ad, { withFileTypes: true }).filter(f => f.isFile()).map(f => f.name) : [];
+      const gate = readJson<any>(join(dir, "gate.json"));
+      const usage = readJson<any>(join(dir, "usage.json"));
+      const todo = readJson<any>(join(dir, "todo.json"));
       return {
-        path, spec, r, gate: readJson<any>(join(dir, "gate.json")),
+        path, spec, r, gate,
         st: viewStatus(rootId, spec, r),
+        // S10 控制面投影：live=worker.json 租约在、cur=尾事件工具/动作、spent=token 累计、wait=waiting 原因
+        live: existsSync(join(dir, "worker.json")),
+        cur: ev?.data?.tool ?? ev?.kind ?? null,
+        spent: usage?.tokens ?? r?.spent?.tokens ?? null,
+        todo: Array.isArray(todo?.items) ? todo.items : null,   // S9 ev_todo 清单投影
+        wait: r?.status === "waiting" ? (gate?.question ?? (Array.isArray(r?.wait_on) ? `等子节点 ${r.wait_on.join(", ")}` : r?.wait_on) ?? null) : null,
         nm: nodeName(rootId, path),
         d: String(r?.summary ?? (ev ? evHint(ev) : "")).split("\n")[0].slice(0, 80),  // 一句话：result.summary 优先，否则尾事件 hint
         sum: r?.summary ?? "",                                                     // sheet 小结
@@ -280,6 +294,7 @@ function apiView(res: any): void {
     const tree = nodes.filter(n => n.path.split("/").length >= 2)   // l=path 段数；root(l=1) 不进树，子节点 l=2 起
       .map(n => ({ l: n.path.split("/").length, acl: n.spec?.accept_idx ?? 0, st: n.st, nm: n.nm, d: n.d, el: n.el,
                    path: n.path, sum: n.sum, steps: n.steps, out: n.out,   // sheet 用：定位/小结/执行过程/产物
+                   live: n.live, cur: n.cur, spent: n.spent, wait: n.wait, todo: n.todo, // S10：live ✕ / Σtok / 回复框；S9：清单
                    wb: n.st === "input" ? "person:answer" : n.st === "dep" ? "dependency" : "" })); // wb=等待对象：等人答/等依赖
     // arts：全部节点 artifacts/ 汇总到 run 级；非 root 节点的 fn 带 path 前缀防重名
     const arts: any[] = [];
@@ -297,9 +312,12 @@ function apiView(res: any): void {
     }
     const runIdx = runs.length;
     const last = runPulse(rootId, nodes.map(n => n.path)).last;
+    // S6：run 行 Σtok = 各节点 spent（result.spent 或 usage.json）累加
+    const spentTotal = nodes.reduce((s, n) => s + (typeof n.spent === "number" ? n.spent : 0), 0);
     runs.push({
       id: rootId, title: meta?.subject ?? rootId, status,
       dur: mmss((ended ? Date.parse(ended) : Date.now()) - Date.parse(meta?.created_at ?? new Date().toISOString())),
+      spent: spentTotal || null,
       snippet: last?.hint ?? "",
       req: meta?.subject ?? "",                                          // 原始诉求
       obj: String(rootNode?.spec?.goal ?? "").split("\n")[0].slice(0, 80), // 目标（根 goal 首行）
@@ -366,6 +384,15 @@ function ensureDaemon(): boolean {
 function apiDeleteRun(res: any, rootId: string): void {
   const dir = safeJoin(rootId);
   if (!dir || !existsSync(dir)) return err(res, 404, "run not found");
+  // 先 abort live worker：删目录后孤儿进程仍在写盘/占 session
+  for (const p of nodePaths(rootId)) {
+    if (existsSync(join(dir, "nodes", ...p.split("/"), "worker.json"))) {
+      try {
+        execFileSync(process.execPath, [AR_CLI, "abort", "--run", rootId, "--node", p],
+          { env: arEnv(), timeout: 20_000, windowsHide: true });
+      } catch { /* 尽力 abort，删除照常 */ }
+    }
+  }
   try { rmSync(dir, { recursive: true, force: true }); } catch (e) { return err(res, 500, String(e)); }
   json(res, 200, { ok: true });
 }
@@ -438,6 +465,58 @@ function apiReply(req: any, res: any, rootId: string, path: string): void {
   });
 }
 
+/** GET .../transcript：events.jsonl 全量 → 轻量 transcript [{type:"msg"|"tool"|"event", ts, text/tool, data}] */
+function apiTranscript(res: any, rootId: string, path: string): void {
+  const dir = safeJoin(rootId, "nodes", ...path.split("/"));
+  if (!dir || !existsSync(dir)) return err(res, 404, "node not found");
+  const file = join(dir, "events.jsonl");
+  const lines = existsSync(file) ? readFileSync(file, "utf8").split("\n").filter(l => l.trim()) : [];
+  const transcript = lines.map(l => {
+    let e: any;
+    try { e = JSON.parse(l); } catch { return { type: "event", ts: null, text: l.slice(0, 200) }; }
+    const k = String(e.kind ?? ""), d = e.data ?? {};
+    if (k === "message" || k === "agent_message" || k === "message_end") {
+      return { type: "msg", ts: e.ts ?? null, text: String(d.text ?? evHint(e)).slice(0, 2000) };
+    }
+    if (k === "tool_call" || k === "tool_execution" || k === "tool_update") {
+      return { type: "tool", ts: e.ts ?? null, tool: String(d.tool ?? "?"),
+               data: { args: d.args, result: d.result, isError: d.isError, durationMs: d.durationMs, call_id: d.call_id } };
+    }
+    return { type: "event", ts: e.ts ?? null, kind: k || "event", text: evHint(e), data: d };
+  });
+  json(res, 200, { transcript, total: transcript.length });
+}
+
+/** POST .../retry：删 result.json + result.resolved.json（+残留 gate.json）→ 节点回 pending，session/ 保留即全史重拉 */
+function apiRetry(res: any, rootId: string, path: string): void {
+  const dir = safeJoin(rootId, "nodes", ...path.split("/"));
+  if (!dir || !existsSync(dir) || !existsSync(join(dir, "spec.json"))) return err(res, 404, "node not found");
+  if (existsSync(join(dir, "worker.json"))) return err(res, 409, "node still running (abort first)");
+  for (const f of ["result.json", "result.resolved.json", "gate.json"]) {
+    try { rmSync(join(dir, f), { force: true }); } catch { /* 已不存在 */ }
+  }
+  try {
+    appendFileSync(join(dir, "events.jsonl"),
+      JSON.stringify({ ts: new Date().toISOString(), kind: "retry", data: { by: "workbench" } }) + "\n", "utf8");
+  } catch { /* 记账失败不阻塞 */ }
+  json(res, 200, { ok: true, daemon: ensureDaemon() });
+}
+
+/** POST .../abort → `ar abort`（读 worker.json → taskkill /T /F 进程树 → 幂等 failed("aborted by user") + abort 事件） */
+function apiAbort(res: any, rootId: string, path: string): void {
+  const dir = safeJoin(rootId, "nodes", ...path.split("/"));
+  if (!dir || !existsSync(dir)) return err(res, 404, "node not found");
+  execFile(process.execPath, [AR_CLI, "abort", "--run", rootId, "--node", path],
+    { env: arEnv(), timeout: 20_000, windowsHide: true, maxBuffer: 512 * 1024 },
+    (e, stdout, stderr) => {
+      if (e) return err(res, 500, `ar abort: ${String(stderr || e.message || e).slice(0, 300)}`);
+      let env1: any = null;
+      try { env1 = JSON.parse(String(stdout).trim().split("\n").pop()!); } catch { /* 非 JSON 输出按成功兜底 */ }
+      if (env1 && env1.ok === false) return err(res, 500, JSON.stringify(env1.error ?? env1));
+      json(res, 200, { ok: true, ...(env1?.data ?? {}) });
+    });
+}
+
 // ---- SSE：runs/ 文件变化推送 ----
 const sseClients = new Set<any>();
 let debounce: NodeJS.Timeout | null = null;
@@ -470,6 +549,9 @@ const R = {
   node: /^\/api\/runs\/([^/]+)\/node\/(.+)\/events$/,
   art: /^\/api\/runs\/([^/]+)\/node\/(.+)\/artifact\/([^/]+)$/,
   reply: /^\/api\/runs\/([^/]+)\/node\/(.+)\/reply$/,
+  abort: /^\/api\/runs\/([^/]+)\/node\/(.+)\/abort$/,
+  transcript: /^\/api\/runs\/([^/]+)\/node\/(.+)\/transcript$/,
+  retry: /^\/api\/runs\/([^/]+)\/node\/(.+)\/retry$/,
   detail: /^\/api\/runs\/([^/]+)\/node\/(.+)$/,
   tree: /^\/api\/runs\/([^/]+)\/tree$/,
 };
@@ -507,6 +589,21 @@ const server = createServer((req, res) => {
       const [, id, np] = m;
       if (!okId(id) || np.split("/").some(badSeg)) return err(res, 400, "bad path");
       return apiReply(req, res, id, np);
+    }
+    if (req.method === "GET" && (m = p.match(R.transcript))) {
+      const [, id, np] = m;
+      if (!okId(id) || np.split("/").some(badSeg)) return err(res, 400, "bad path");
+      return apiTranscript(res, id, np);
+    }
+    if (req.method === "POST" && (m = p.match(R.abort))) {
+      const [, id, np] = m;
+      if (!okId(id) || np.split("/").some(badSeg)) return err(res, 400, "bad path");
+      return apiAbort(res, id, np);
+    }
+    if (req.method === "POST" && (m = p.match(R.retry))) {
+      const [, id, np] = m;
+      if (!okId(id) || np.split("/").some(badSeg)) return err(res, 400, "bad path");
+      return apiRetry(res, id, np);
     }
     if (req.method === "GET" && (m = p.match(R.detail))) {
       const [, id, np] = m;

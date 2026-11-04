@@ -1,0 +1,12 @@
+{
+  "type": "assign",
+  "agent": "pi",
+  "goal": "hook dispatch 冒烟",
+  "accept": [
+    "输出一句话执行摘要"
+  ],
+  "budget": {
+    "depth_left": 2
+  },
+  "id": "node:b8ef69ef-cd88/hd1"
+}

@@ -1,0 +1,13 @@
+{
+  "id": "node:testr1/root/sub1",
+  "type": "assign",
+  "agent": "pi",
+  "goal": "Immediately call the ev_done tool with a one-line summary \"pong\". Do nothing else.",
+  "accept": [
+    "call ev_done"
+  ],
+  "budget": {
+    "depth_left": 1
+  },
+  "accept_idx": 0
+}

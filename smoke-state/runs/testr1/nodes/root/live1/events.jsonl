@@ -1,0 +1,2 @@
+{"ts":"2026-11-04T05:26:22.832Z","kind":"tool_execution","data":{"tool":"bash","result":"sleeping…"}}
+{"ts":"2026-11-04T05:28:30.636Z","kind":"abort","data":{"pid":18340,"killed":true,"summary":"aborted by user"}}

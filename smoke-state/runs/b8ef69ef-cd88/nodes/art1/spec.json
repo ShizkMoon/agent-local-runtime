@@ -1,0 +1,26 @@
+{
+  "type": "assign",
+  "agent": "pi",
+  "goal": "消费上游 artifact",
+  "accept": [
+    "输出一句话执行摘要"
+  ],
+  "budget": {
+    "depth_left": 2
+  },
+  "skills": [
+    "desktop"
+  ],
+  "id": "node:b8ef69ef-cd88/art1",
+  "inputs": [
+    {
+      "ref": "art://b8ef69ef-cd88/root/hello.txt"
+    },
+    {
+      "ref": "art://b8ef69ef-cd88/root/missing.txt"
+    },
+    {
+      "ref": "C:/no/such/file.txt"
+    }
+  ]
+}

@@ -1,0 +1,7 @@
+{
+  "worker": null,
+  "orchestrator": null,
+  "reviewer": null,
+  "advisor": null,
+  "fallback": ["opencode-pool/deepseek-v4.1-flash"]
+}

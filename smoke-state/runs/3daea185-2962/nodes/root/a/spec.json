@@ -1,0 +1,15 @@
+{
+  "type": "assign",
+  "agent": "pi",
+  "goal": "placeholder",
+  "depends": [
+    "root/never"
+  ],
+  "accept": [
+    "输出一句话执行摘要"
+  ],
+  "budget": {
+    "depth_left": 2
+  },
+  "id": "node:3daea185-2962/root/a"
+}

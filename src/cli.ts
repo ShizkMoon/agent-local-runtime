@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // ar CLI：无状态命令面。evd/受限入口/人工共用，统一 JSON envelope 输出
-import { createRun, writeSpec, readSpec, readResult, writeResult, checkRun, appendEvent, writeGate, resolveWaiting, RUNS_DIR, runsDir } from "./runs.ts";
+import { createRun, writeSpec, readSpec, readResult, writeResult, checkRun, appendEvent, writeGate, resolveWaiting, abortWorker, RUNS_DIR, runsDir } from "./runs.ts";
 import { daemonLoop } from "./daemon.ts";
 import type { SpecEnvelope, NodeStatus } from "./envelope.ts";
 
@@ -20,6 +20,18 @@ function readStdin(): Promise<string> {
     process.stdin.on("end", () => res(s));
     process.stdin.isTTY && res("");
   });
+}
+
+/** --rules 解析：优先 JSON 数组；否则 `pattern=>message;pattern2=>msg2`（无 => 时给默认 reason） */
+function parseRules(raw: string | undefined): SpecEnvelope["rules"] {
+  if (!raw) return undefined;
+  try { const v = JSON.parse(raw); return Array.isArray(v) ? v : undefined; }
+  catch {
+    return raw.split(";").filter(Boolean).map((p) => {
+      const i = p.indexOf("=>");
+      return i >= 0 ? { pattern: p.slice(0, i), message: p.slice(i + 2) } : { pattern: p, message: "blocked by spec rule" };
+    });
+  }
 }
 
 const cmd = process.argv[2];
@@ -45,6 +57,13 @@ async function main(): Promise<void> {
         accept: task.accept ?? ["输出一句话执行摘要"],
         budget: task.budget ?? { depth_left: 2 },
         tools: task.tools,
+        // S1 审批/守门/挂载面透传
+        permission: task.permission,
+        approve: task.approve,
+        deny: task.deny,
+        deny_paths: task.deny_paths,
+        rules: task.rules,
+        skills: task.skills,
       });
       return out(true, cmd, { root_id: rootId, node: `node:${rootId}/root`, ev_id: task.ev_id });
     }
@@ -59,8 +78,15 @@ async function main(): Promise<void> {
         parent: arg("--parent"),
         depends: arg("--deps")?.split(","),
         accept: arg("--accept")?.split(";") ?? ["输出一句话执行摘要"],
-        budget: { depth_left: Number(arg("--depth") ?? 2) },
+        budget: { depth_left: Number(arg("--depth") ?? 2), ...(arg("--minutes") ? { minutes: Number(arg("--minutes")) } : {}) },
         tools: arg("--tools")?.split(","),
+        // S1 新字段：--approve/--deny/--deny-paths/--skills 分号分隔，--permission 档位，--rules JSON 或 pattern=>message;…
+        permission: arg("--permission") as SpecEnvelope["permission"],
+        approve: arg("--approve")?.split(";").filter(Boolean),
+        deny: arg("--deny")?.split(";").filter(Boolean),
+        deny_paths: arg("--deny-paths")?.split(";").filter(Boolean),
+        rules: parseRules(arg("--rules")),
+        skills: arg("--skills")?.split(";").filter(Boolean),
       });
       return out(true, cmd, { root_id: rootId });
     }
@@ -95,7 +121,22 @@ async function main(): Promise<void> {
       const rootId = process.env.AR_ROOT_ID ?? arg("--run")!;
       const path = process.env.AR_NODE_PATH ?? arg("--node") ?? "root";
       const status: NodeStatus = cmd === "done" ? "done" : "failed";
-      const r = writeResult(rootId, path, { status, summary: arg("--summary") ?? process.argv[3] ?? "" });
+      // S6：worker 自报累计 token；缺省由 daemon 在 worker 退出时按 usage.json 兜底
+      const st = Number(arg("--spent-tokens"));
+      const r = writeResult(rootId, path, {
+        status, summary: arg("--summary") ?? process.argv[3] ?? "",
+        ...(Number.isFinite(st) && st > 0 ? { spent: { tokens: st } } : {}),
+      });
+      return out(true, cmd, r);
+    }
+    case "wait": {
+      // Worker 侧调用（ev_wait 工具）：写 waiting result + wait_on + gate.json；
+      // 全部子节点 done 后 pendingNodes 自动归档并注入子摘要复活（无需人工回复）
+      const rootId = process.env.AR_ROOT_ID ?? arg("--run")!;
+      const path = process.env.AR_NODE_PATH ?? arg("--node") ?? "root";
+      const on = (arg("--on") ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+      writeGate(rootId, path, { question: "等待子节点", opts: [] });
+      const r = writeResult(rootId, path, { status: "waiting", summary: `等待子节点：${on.join(", ") || "(空)"}`, wait_on: on });
       return out(true, cmd, r);
     }
     case "event": {
@@ -103,6 +144,12 @@ async function main(): Promise<void> {
       const path = process.env.AR_NODE_PATH ?? arg("--node") ?? "root";
       appendEvent(rootId, path, { kind: (arg("--kind") as never) ?? "checkpoint", data: { text: process.argv[3] ?? "" } });
       return out(true, cmd, {});
+    }
+    case "abort": {
+      // 中止 live worker：读 worker.json → taskkill 进程树 → 幂等 failed("aborted by user") + abort 事件
+      const rootId = process.env.AR_ROOT_ID ?? arg("--run")!;
+      const path = process.env.AR_NODE_PATH ?? arg("--node") ?? "root";
+      return out(true, cmd, abortWorker(rootId, path, "aborted by user"));
     }
     case "daemon": {
       runsDir();
@@ -117,7 +164,7 @@ async function main(): Promise<void> {
     default:
       return out(false, "help", undefined, {
         code: "USAGE",
-        commands: ["run-create", "dispatch", "node-create", "check", "reply", "gate", "done", "fail", "event", "daemon", "version"],
+        commands: ["run-create", "dispatch", "node-create", "check", "reply", "gate", "done", "fail", "wait", "event", "abort", "daemon", "version"],
       });
   }
 }
