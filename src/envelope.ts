@@ -29,6 +29,7 @@ export interface SpecEnvelope {
   already_known?: string[];
   tools?: string[];       // 授予的工具面（未声明则不授 ar 等敏感工具）
   reply?: { text: string; ts: string }[];  // ar reply 注入的人工回复
+  accept_idx?: number;    // 节点挂在 run 级 accept 条目（根 spec.accept）的下标，chips 投影用
 }
 
 export interface ResultEnvelope {

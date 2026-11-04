@@ -1,0 +1,9 @@
+{
+  "name": "AICA 工作台",
+  "slug": "aica-workbench",
+  "identifier": "dev.aica.workbench",
+  "version": "0.1.0",
+  "windows": {
+    "displayName": "AICA 工作台"
+  }
+}

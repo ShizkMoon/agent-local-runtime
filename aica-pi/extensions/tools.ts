@@ -64,6 +64,22 @@ export default function (pi: any) {
   });
 
   pi.registerTool({
+    name: "ev_gate",
+    label: "Ev Gate",
+    description: "人工闸门：向人工提问并挂起节点（status=waiting）。options 给可选答复文案；人工回复后节点自动恢复执行。",
+    parameters: Type.Object({
+      question: Type.String({ description: "要向人工确认的问题" }),
+      options: Type.Optional(Type.Array(Type.String(), { description: "可选答复文案，如 ['同意','拒绝']" })),
+    }),
+    async execute(_id: string, args: any) {
+      const a = ["gate", "--question", args.question];
+      if (args.options?.length) a.push("--opts", args.options.join(";"));
+      // terminate：节点已挂起等人工，提示 pi 收口本轮
+      return ok(ar(a), { terminate: true });
+    },
+  });
+
+  pi.registerTool({
     name: "kn_recall",
     label: "Kn Recall",
     description: "知识检索（kb 环）：查任务历史、文档、会话记录。返回 top-k 分块。",

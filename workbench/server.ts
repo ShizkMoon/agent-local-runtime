@@ -195,6 +195,133 @@ function apiArtifact(res: any, rootId: string, path: string, name: string): void
   res.end(readFileSync(file));
 }
 
+// ---- /api/v1/view：workbench 视图投影（run 卡片 + 树 + 收件箱 inbox + 已完结 settled）----
+const pad2 = (n: number) => String(n).padStart(2, "0");
+function mmss(ms: number): string {           // "mm:ss"（分钟可超 59，与原型一致）
+  const s = Math.max(0, Math.round(ms / 1000));
+  return `${pad2(Math.floor(s / 60))}:${pad2(s % 60)}`;
+}
+function hhmm(iso: string): string {          // settled 时间戳 "HH:MM"（本地时区）
+  const d = new Date(iso);
+  return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+}
+function nodeName(rootId: string, path: string): string {   // nm：spec.goal 首行截 20 字，兜底 path 末段
+  const spec = readJson<any>(join(RUNS, rootId, "nodes", ...path.split("/"), "spec.json"));
+  const first = String(spec?.goal ?? "").split("\n")[0].trim();
+  return (first || path.split("/").pop() || path).slice(0, 20);
+}
+function depDone(rootId: string, dep: string): boolean {    // depends 写兄弟 path 或完整 node:<root>/<path>
+  const p = dep.startsWith(`node:${rootId}/`) ? dep.slice(`node:${rootId}/`.length) : dep;
+  return readJson<any>(join(RUNS, rootId, "nodes", ...p.split("/"), "result.json"))?.status === "done";
+}
+// tree 的 st 映射：waiting→input / 无 result 且 dep 未满足→dep / 无 result（未拉起或跑着）→queued / blocked→dep
+function viewStatus(rootId: string, spec: any, r: any): string {
+  if (r) return ({ waiting: "input", done: "done", failed: "failed", blocked: "dep" } as Record<string, string>)[r.status] ?? "done";
+  if (spec?.depends?.length && spec.depends.some((d: string) => !depDone(rootId, d))) return "dep";
+  return "queued";
+}
+
+function apiView(res: any): void {
+  const runs: any[] = [], inbox: any[] = [], settled: any[] = [];
+  if (!existsSync(RUNS)) return json(res, 200, { runs, inbox, settled });
+  const rootIds = readdirSync(RUNS, { withFileTypes: true })
+    .filter(d => d.isDirectory() && okId(d.name)).map(d => d.name)
+    .sort((a, b) => String(readJson<any>(join(RUNS, b, "run.json"))?.created_at ?? "")
+      .localeCompare(String(readJson<any>(join(RUNS, a, "run.json"))?.created_at ?? ""))); // 新 run 在前（同 /api/runs）
+  for (const rootId of rootIds) {
+    const meta = readJson<any>(join(RUNS, rootId, "run.json"));
+    // 节点级投影：spec + result + 尾事件 + gate
+    const nodes = nodePaths(rootId).map(path => {
+      const dir = join(RUNS, rootId, "nodes", ...path.split("/"));
+      const spec = readJson<any>(join(dir, "spec.json"));
+      const r = readJson<any>(join(dir, "result.json"));
+      const ev = tailEvent(join(dir, "events.jsonl"));
+      const specFile = join(dir, "spec.json");
+      const created = existsSync(specFile) ? statSync(specFile).mtimeMs : Date.now(); // 无 spec.created_at，用文件 mtime
+      // steps：events.jsonl 尾部事件 → sheet「执行过程」行 {t,a,r,st}
+      const evLines = existsSync(join(dir, "events.jsonl"))
+        ? readFileSync(join(dir, "events.jsonl"), "utf8").split("\n").filter(l => l.trim()).slice(-12) : [];
+      const steps = evLines.map(l => {
+        try {
+          const e = JSON.parse(l), kind = e.kind ?? "";
+          const st = kind === "exit" ? (e.data?.error || (e.data?.code ?? 0) !== 0 ? "err" : "ok")
+                   : kind === "gate" ? "wait" : kind === "spawn" ? "run" : "ok";
+          return { t: String(e.ts ?? "").slice(11, 19), a: String(kind), r: evHint(e).slice(0, 60), st };
+        } catch { return null; }
+      }).filter(Boolean);
+      const ad = join(dir, "artifacts");
+      const out = existsSync(ad) ? readdirSync(ad, { withFileTypes: true }).filter(f => f.isFile()).map(f => f.name) : [];
+      return {
+        path, spec, r, gate: readJson<any>(join(dir, "gate.json")),
+        st: viewStatus(rootId, spec, r),
+        nm: nodeName(rootId, path),
+        d: String(r?.summary ?? (ev ? evHint(ev) : "")).split("\n")[0].slice(0, 80),  // 一句话：result.summary 优先，否则尾事件 hint
+        sum: r?.summary ?? "",                                                     // sheet 小结
+        steps, out,
+        el: mmss((r?.finished_at ? Date.parse(r.finished_at) : Date.now()) - created),
+      };
+    });
+    const waiting = nodes.filter(n => n.st === "input");
+    const allDone = nodes.length > 0 && nodes.every(n => n.r?.status === "done");
+    const ended = nodes.map(n => n.r?.finished_at).filter(Boolean).sort().pop() as string | undefined;
+    if (allDone) {   // 全部节点 done 的 run 不进 runs，进 settled
+      settled.push([meta?.subject ?? rootId, hhmm(ended ?? meta?.created_at ?? new Date().toISOString())]);
+      continue;
+    }
+    const status = waiting.length ? "input" : "working";  // failed 也算 working（简单聚合）
+    const rootNode = nodes.find(n => n.path === "root") ?? nodes[0];
+    // chips：根 spec.accept → [状态,条文]。简化判定：spec.accept_idx===i 的节点 result 存在即 verified、failed 即 failed、无则 pending
+    const chips = (rootNode?.spec?.accept ?? []).map((a: string, i: number) => {
+      const acx = nodes.find(n => n.spec?.accept_idx === i);
+      return [!acx?.r ? "pending" : acx.r.status === "failed" ? "failed" : "verified", a];
+    });
+    const tree = nodes.filter(n => n.path.split("/").length >= 2)   // l=path 段数；root(l=1) 不进树，子节点 l=2 起
+      .map(n => ({ l: n.path.split("/").length, acl: n.spec?.accept_idx ?? 0, st: n.st, nm: n.nm, d: n.d, el: n.el,
+                   path: n.path, sum: n.sum, steps: n.steps, out: n.out,   // sheet 用：定位/小结/执行过程/产物
+                   wb: n.st === "input" ? "person:answer" : n.st === "dep" ? "dependency" : "" })); // wb=等待对象：等人答/等依赖
+    // arts：全部节点 artifacts/ 汇总到 run 级；非 root 节点的 fn 带 path 前缀防重名
+    const arts: any[] = [];
+    for (const n of nodes) {
+      const ad = join(RUNS, rootId, "nodes", ...n.path.split("/"), "artifacts");
+      if (!existsSync(ad)) continue;
+      for (const f of readdirSync(ad, { withFileTypes: true })) {
+        if (!f.isFile()) continue;
+        const fp = join(ad, f.name);
+        const sz = statSync(fp).size;
+        arts.push({ fn: n.path === "root" ? f.name : `${n.path}/${f.name}`,
+                    sz: sz >= 1024 ? `${(sz / 1024).toFixed(1).replace(/\.0$/, "")} KB` : `${sz} B`,
+                    body: readFileSync(fp).subarray(0, 64 * 1024).toString("utf8") });
+      }
+    }
+    const runIdx = runs.length;
+    const last = runPulse(rootId, nodes.map(n => n.path)).last;
+    runs.push({
+      id: rootId, title: meta?.subject ?? rootId, status,
+      dur: mmss((ended ? Date.parse(ended) : Date.now()) - Date.parse(meta?.created_at ?? new Date().toISOString())),
+      snippet: last?.hint ?? "",
+      req: meta?.subject ?? "",                                          // 原始诉求
+      obj: String(rootNode?.spec?.goal ?? "").split("\n")[0].slice(0, 80), // 目标（根 goal 首行）
+      sum: rootNode?.r?.summary ?? "",                                   // 摘要（根 result）
+      chips, tree, arts,
+    });
+    // inbox：waiting 节点 → 人工闸门条目（gate.run 指回 runs 数组下标）
+    for (const n of waiting) {
+      const q = String(n.gate?.question ?? n.r?.summary ?? "");
+      const opts = n.gate?.opts?.length
+        ? n.gate.opts.map((o: string) => [o, "", `已选择·${o}`])          // [文案, 图标位, 已选后文案]
+        : [["同意", "", "已同意"], ["拒绝", "", "已拒绝"]];
+      const segs = n.path.split("/");
+      const crumb = [meta?.subject ?? rootId, ...segs.map((_, i) => nodeName(rootId, segs.slice(0, i + 1).join("/")))];
+      inbox.push({
+        id: n.spec?.id ?? `node:${rootId}/${n.path}`,
+        t: q.split("\n")[0].slice(0, 80), d: q, crumb, opts,
+        gate: { run: runIdx, nm: n.nm, pd: `回复已送达，${n.nm} 恢复执行`, sn: "已回复 · 节点恢复运行" },
+      });
+    }
+  }
+  json(res, 200, { runs, inbox, settled });
+}
+
 // ---- ar CLI 桥：dispatch / reply / daemon ----
 // ar 路径：node <AR_CLI> <cmd>；env 显式给已解析的 AICA_STATE（空串会让 runs.ts 落相对路径）
 let daemonProc: ChildProcess | null = null;
@@ -343,6 +470,7 @@ const server = createServer((req, res) => {
   const p = decodeURIComponent(url.pathname);
   try {
     if (req.method === "GET" && p === "/api/runs") return apiRuns(res);
+    if (req.method === "GET" && p === "/api/v1/view") return apiView(res);
     if (req.method === "GET" && p === "/api/stream") return apiStream(req, res);
     if (req.method === "GET" && p === "/api/daemon") return apiDaemon(res);
     if (req.method === "POST" && p === "/api/tasks") return apiTask(req, res);

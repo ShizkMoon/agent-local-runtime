@@ -1,0 +1,893 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AICA 工作台 · dir-3 Swiss 极致黑白</title>
+<style>
+/* ============================================================
+   dir-3 · Swiss 极致黑白 — zero-color discipline
+   ============================================================ */
+:root{
+  --bg:      #000000;
+  --bg2:     #0a0a0a;
+  --panel:   #111111;
+  --panel2:  #161616;
+  --hair:    rgba(255,255,255,.08);
+  --hair2:   rgba(255,255,255,.15);
+  --hair3:   rgba(255,255,255,.30);
+  --tx:      #fafafa;
+  --tx2:     #a3a3a3;
+  --tx3:     #787878;            /* dim / struck — decorative */
+  --sans:    system-ui,"Segoe UI","Helvetica Neue",Arial,sans-serif;
+  --mono:    ui-monospace,"Cascadia Mono","Cascadia Code",Consolas,"Courier New",monospace;
+  --t:       120ms linear;
+}
+*{margin:0;padding:0;box-sizing:border-box;border-radius:0}
+html,body{height:100%}
+body{
+  background:var(--bg);
+  color:var(--tx);
+  font:400 14px/1.55 var(--sans);
+  letter-spacing:0;
+  -webkit-font-smoothing:antialiased;
+  overflow:hidden;
+}
+::selection{background:var(--tx);color:#000}
+::-webkit-scrollbar{width:6px;height:6px}
+::-webkit-scrollbar-track{background:var(--bg)}
+::-webkit-scrollbar-thumb{background:#2a2a2a;border:none}
+::-webkit-scrollbar-thumb:hover{background:#3a3a3a}
+
+button{font:inherit;color:inherit;background:none;border:none;cursor:pointer;text-align:left}
+button:focus-visible,a:focus-visible{outline:1px solid var(--tx);outline-offset:2px}
+
+.mono{font-family:var(--mono)}
+.micro{
+  font:600 11px/1 var(--sans);
+  letter-spacing:.14em;
+  text-transform:uppercase;
+  color:var(--tx3);
+}
+.micro b{color:var(--tx2);font-weight:600}
+
+/* ---------- page-load clip-path wipe ---------- */
+@keyframes wipe{from{clip-path:inset(0 100% 0 0)}to{clip-path:inset(0 0 0 0)}}
+@keyframes scanline{0%{left:0;opacity:1}92%{opacity:1}100%{left:100%;opacity:0}}
+@keyframes blink{0%,49%{opacity:1}50%,100%{opacity:0}}
+@keyframes tick{0%{transform:translateX(-3px)}100%{transform:translateX(12px)}}
+@keyframes pulse{0%,100%{border-color:var(--tx)}50%{border-color:#4a4a4a}}
+
+.reveal{clip-path:inset(0 100% 0 0);animation:wipe .72s linear forwards}
+.d1{animation-delay:.05s}.d2{animation-delay:.18s}.d3{animation-delay:.32s}
+#scan{position:fixed;top:0;bottom:0;left:0;width:1px;background:var(--tx);z-index:99;
+      animation:scanline 1s linear .05s forwards;pointer-events:none}
+
+/* ---------- app grid ---------- */
+.app{
+  display:grid;
+  grid-template-columns:204px 424px minmax(0,1fr);
+  height:100vh;
+  min-width:1180px;
+}
+
+/* ============ RAIL ============ */
+.rail{
+  background:var(--bg);
+  border-right:1px solid var(--hair);
+  display:flex;flex-direction:column;
+  padding:0 0 20px 0;
+}
+.rail-brand{
+  padding:26px 20px 22px;
+  border-bottom:1px solid var(--hair);
+}
+.rail-brand .logo{
+  font:600 15px/1 var(--mono);
+  letter-spacing:.06em;
+  display:flex;align-items:center;gap:9px;
+}
+.rail-brand .logo::before{content:"";width:11px;height:11px;background:var(--tx);display:block}
+.rail-brand .sub{margin-top:9px;font:400 12px/1 var(--mono);color:var(--tx3)}
+.rail-nav{flex:1;padding:14px 0}
+.rail-nav .micro{padding:6px 20px 12px;display:block}
+.nav-item{
+  display:flex;align-items:center;gap:0;
+  width:100%;min-height:44px;padding:0 20px;
+  color:var(--tx2);font-size:14px;font-weight:400;
+  border-left:3px solid transparent;
+  transition:background var(--t),color var(--t),border-color var(--t);
+  position:relative;
+}
+.nav-item .n{font:400 12px/1 var(--mono);color:var(--tx3);width:24px;flex:none}
+.nav-item:hover{background:var(--panel);color:var(--tx)}
+.nav-item.active{color:var(--tx);font-weight:600;border-left-color:var(--tx);background:var(--panel)}
+.nav-item .cnt{margin-left:auto;font:400 12px/1 var(--mono);color:var(--tx2)}
+.nav-item.active .cnt{color:var(--tx)}
+.nav-item .cnt.inv{background:var(--tx);color:#000;padding:1px 6px;font-weight:700}
+.rail-foot{
+  border-top:1px solid var(--hair);
+  padding:16px 20px 0;
+  display:flex;flex-direction:column;gap:8px;
+}
+.rail-foot .row{display:flex;justify-content:space-between;align-items:center;
+  font:400 12px/1.6 var(--mono);color:var(--tx2)}
+.rail-foot .ok{color:var(--tx)}
+.rail-foot .theme-note{margin-top:8px;font:400 12px/1.5 var(--mono);color:#5a5a5a;
+  border-top:1px dashed var(--hair);padding-top:10px}
+
+/* ============ COLUMN SHARED ============ */
+.col{overflow-y:auto;overflow-x:hidden;position:relative}
+.col-inbox{background:var(--bg2);border-right:1px solid var(--hair)}
+.col-task{background:var(--bg);display:flex;flex-direction:column}
+
+.sec-head{
+  padding:30px 28px 20px;
+  position:relative;
+  border-bottom:1px solid var(--hair);
+}
+.sec-head .ghost{
+  position:absolute;top:2px;right:14px;
+  font:200 110px/1 var(--sans);
+  letter-spacing:-.06em;color:#141414;
+  user-select:none;pointer-events:none;
+}
+.sec-head .micro{display:block;margin-bottom:10px;position:relative}
+.sec-title{
+  font:300 40px/1.1 var(--sans);
+  letter-spacing:-.03em;
+  position:relative;
+}
+.sec-title .marker{display:inline-block;width:14px;height:.72em;background:var(--tx);
+  margin-right:12px;vertical-align:baseline;transform:translateY(.06em)}
+.sec-meta{margin-top:12px;font:400 12px/1.5 var(--mono);color:var(--tx2);position:relative}
+.sec-meta em{font-style:normal;color:var(--tx);border-bottom:1px solid var(--hair3)}
+
+/* ============ INBOX CARDS ============ */
+.cards{border-bottom:1px solid var(--hair)}
+.card{
+  border-bottom:1px solid var(--hair);
+  padding:18px 28px 20px;
+  position:relative;
+  transition:background var(--t),opacity var(--t);
+}
+.card:last-child{border-bottom:none}
+.card::before{content:"";position:absolute;left:0;top:0;bottom:0;width:0;background:var(--tx);transition:width var(--t)}
+.card[data-state="needs"]::before{width:4px}
+.card-tag{
+  display:flex;align-items:center;gap:8px;
+  font:600 12px/1 var(--mono);letter-spacing:.08em;
+  color:var(--tx);margin-bottom:10px;
+}
+.card-tag .mk{font-weight:400}
+.card-tag .path{margin-left:auto;font-weight:400;color:var(--tx3);letter-spacing:0}
+.card h3{font:600 15.5px/1.4 var(--sans);letter-spacing:-.01em;margin-bottom:6px}
+.card .desc{font-size:14px;color:var(--tx2);max-width:34em}
+.card .crumb{
+  font:400 12px/1.7 var(--mono);color:var(--tx2);
+  border:1px solid var(--hair);display:inline-block;
+  padding:3px 8px;margin:2px 0 8px;max-width:100%;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
+.card .crumb i{font-style:normal;color:var(--tx3)}
+.opts{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}
+.opt{
+  min-height:44px;padding:0 18px;
+  display:inline-flex;align-items:center;gap:9px;
+  border:1px solid var(--hair2);
+  font:400 13.5px/1 var(--sans);color:var(--tx);
+  background:transparent;
+  transition:background var(--t),color var(--t),border-color var(--t);
+}
+.opt:hover{border-color:var(--tx)}
+.opt.solid{background:var(--tx);color:#000;font-weight:600;border-color:var(--tx)}
+.opt.solid:hover{background:#fff}
+.opt .k{font:400 12px/1 var(--mono);opacity:.55}
+
+/* resolved grammar */
+.card.done{opacity:1}
+.card.done::before{width:0}
+.card.done h3{color:var(--tx3);text-decoration:line-through;text-decoration-thickness:1px}
+.card.done .desc,.card.done .crumb{color:#5c5c5c}
+.card.done .card-tag{color:var(--tx3)}
+.card.done .opts{display:none}
+.card .verdict{
+  display:none;margin-top:12px;
+  font:400 12px/1.6 var(--mono);color:var(--tx2);
+}
+.card.done .verdict{display:block}
+.card.done .verdict::before{content:"— ";color:var(--tx3)}
+
+/* failed card */
+.card.failed .card-tag .inv{background:var(--tx);color:#000;padding:0 5px;font-weight:700}
+.card.failed h3::before{content:"× ";font-weight:300}
+
+/* ============ INVERTED DANGER CARD (white on black) ============ */
+.card.invert{
+  background:var(--tx);color:#000;
+  margin:0 0 0 0;
+  border-bottom:none;
+}
+.card.invert::before{width:0}
+.card.invert .card-tag{color:#000}
+.card.invert .card-tag .inv{background:#000;color:var(--tx);padding:0 5px;font-weight:700}
+.card.invert h3{color:#000}
+.card.invert .desc{color:#3d3d3d}
+.card.invert .desc .mono{color:#000}
+.card.invert .opt{border-color:#000;color:#000}
+.card.invert .opt:hover{background:#000;color:var(--tx)}
+.card.invert .opt.solid{background:#000;color:var(--tx)}
+.card.invert .opt.solid:hover{background:#222}
+.card.invert.done{background:transparent;color:var(--tx3);
+  box-shadow:inset 0 0 0 1px var(--hair2)}
+.card.invert.done h3{color:var(--tx3)}
+.card.invert.done .card-tag{color:var(--tx3)}
+.card.invert.done .desc{color:#5c5c5c}
+
+/* ============ RUNNING STRIP ============ */
+.runs{border-bottom:1px solid var(--hair)}
+.run{
+  width:100%;display:grid;
+  grid-template-columns:16px minmax(0,1fr) auto;
+  gap:6px 12px;align-items:center;
+  padding:13px 28px;min-height:52px;
+  border-bottom:1px solid var(--hair);
+  transition:background var(--t);
+  position:relative;
+}
+.run:last-child{border-bottom:none}
+.run:hover{background:var(--panel)}
+.run.active{background:var(--panel)}
+.run.active::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--tx)}
+.runbox{
+  width:12px;height:12px;border:1px solid var(--tx);
+  position:relative;overflow:hidden;flex:none;
+  animation:pulse 2.4s linear infinite;
+}
+.runbox i{position:absolute;top:0;bottom:0;left:0;width:2px;background:var(--tx);
+  animation:tick 1.1s linear infinite}
+.runbox.wait{animation:none;border-color:var(--tx2)}
+.runbox.wait i{display:none}
+.runbox.wait::after{content:"";position:absolute;left:2px;top:2px;right:2px;bottom:2px;
+  border:1px solid var(--tx3)}
+.run .subj{font-size:14px;font-weight:400;color:var(--tx);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.run .t{font:400 12px/1 var(--mono);color:var(--tx2);justify-self:end}
+.run .snip{
+  grid-column:2/4;
+  font:400 12px/1.5 var(--mono);color:var(--tx3);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
+.run .snip b{color:var(--tx2);font-weight:400}
+.run .wbadge{font-style:normal;color:var(--tx);border:1px solid var(--hair2);padding:0 5px}
+
+/* ============ TASK VIEW ============ */
+.task-scroll{flex:1;overflow-y:auto;padding-bottom:0}
+.tv-head{
+  padding:30px 36px 18px;border-bottom:1px solid var(--hair);
+  position:relative;
+}
+.tv-head .ghost{position:absolute;top:2px;right:20px;font:200 110px/1 var(--sans);
+  letter-spacing:-.06em;color:#111;user-select:none;pointer-events:none}
+.tv-crumb{font:400 12px/1.6 var(--mono);color:var(--tx3);margin-top:12px;position:relative}
+.tv-crumb i{font-style:normal;color:var(--tx2)}
+.tv-crumb .cur{color:var(--tx);border-bottom:1px solid var(--tx)}
+
+.block{padding:24px 36px;border-bottom:1px solid var(--hair)}
+.block-label{display:flex;align-items:baseline;gap:14px;margin-bottom:16px}
+.block-label .ln{flex:1;height:1px;background:var(--hair);transform:translateY(-3px)}
+.block-label .r{font:400 12px/1 var(--mono);color:var(--tx3)}
+
+/* root card */
+.root{
+  border:1px solid var(--hair2);
+  background:var(--panel);
+  padding:26px 28px 24px;
+  position:relative;
+}
+.root::before{content:"";position:absolute;left:-1px;top:-1px;width:34px;height:5px;background:var(--tx)}
+.root-id{font:400 12px/1.6 var(--mono);color:var(--tx3);margin-bottom:12px}
+.root-id b{color:var(--tx2);font-weight:400}
+.root h2{font:300 34px/1.15 var(--sans);letter-spacing:-.03em;margin-bottom:8px}
+.root .obj{font-size:14px;color:var(--tx2);max-width:52em}
+.root .rollup{
+  display:inline-flex;align-items:center;gap:6px;margin-top:14px;
+  font:400 12px/1 var(--mono);color:var(--tx);
+  border:1px solid var(--hair2);padding:6px 10px;
+}
+.root .rollup::before{content:"↩";color:var(--tx3)}
+
+/* accept chips — square toggles */
+.accept{margin-top:20px;padding-top:18px;border-top:1px solid var(--hair)}
+.accept .micro{display:block;margin-bottom:12px}
+.chips{display:flex;flex-wrap:wrap;gap:8px}
+.chip{
+  min-height:44px;padding:0 14px;
+  display:inline-flex;align-items:center;gap:10px;
+  border:1px solid var(--hair2);
+  font:400 13.5px/1 var(--sans);color:var(--tx);
+  background:transparent;
+  transition:border-color var(--t),background var(--t);
+}
+.chip:hover{border-color:var(--tx)}
+.chip .g{font:400 13px/1 var(--mono);width:14px;text-align:center}
+.chip .cls{font:400 12px/1 var(--mono);color:var(--tx3)}
+.chip[data-s="verified"]{background:var(--tx);color:#000;border-color:var(--tx);font-weight:600}
+.chip[data-s="verified"] .cls{color:#3d3d3d}
+.chip[data-s="human"]{border-color:var(--tx);box-shadow:inset 0 -3px 0 var(--tx)}
+.chip[data-s="failed"]{border-color:var(--hair3)}
+.chip[data-s="failed"] .st{color:var(--tx2);text-decoration:line-through}
+.chip.delta{border-style:dashed;color:var(--tx2);cursor:default}
+.chip.delta .plus{font:600 13px/1 var(--mono)}
+
+/* fact cards */
+.facts{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:var(--hair)}
+.fact{background:var(--bg2);padding:16px 18px;min-height:112px;
+  display:flex;flex-direction:column}
+.fact .mk{font:400 12px/1 var(--mono);color:var(--tx3);margin-bottom:10px}
+.fact p{font-size:14px;line-height:1.5;color:var(--tx);flex:1}
+.fact .src{margin-top:10px;font:400 12px/1.5 var(--mono);color:var(--tx3);
+  border-top:1px solid var(--hair);padding-top:8px}
+.fact .src b{color:var(--tx2);font-weight:400}
+
+/* artifact row */
+.arts{display:grid;grid-template-columns:1.2fr 1fr 1fr;gap:1px;background:var(--hair)}
+.art{background:var(--bg2);min-height:148px;padding:14px 16px;
+  display:flex;flex-direction:column;transition:background var(--t)}
+.art:hover{background:var(--panel)}
+.art .ah{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:10px}
+.art .ah .fn{font:400 12.5px/1.4 var(--mono);color:var(--tx)}
+.art .ah .ft{font:600 12px/1 var(--sans);letter-spacing:.14em;color:var(--tx3)}
+.art .body{flex:1;font:400 12px/1.8 var(--mono);color:var(--tx2);overflow:hidden}
+.art .body .h{color:var(--tx)}
+.art .body .plus{color:var(--tx)}
+.art .body .minus{color:var(--tx3);text-decoration:line-through}
+.art .stats{font:400 12px/1 var(--mono);color:var(--tx2);margin-top:8px;
+  border-top:1px solid var(--hair);padding-top:8px}
+.page-mock{flex:1;border:1px solid var(--hair2);padding:8px;display:flex;flex-direction:column;gap:5px}
+.page-mock .bar{height:5px;background:#2e2e2e}
+.page-mock .bar.w40{width:40%}.page-mock .bar.w70{width:70%}.page-mock .bar.w55{width:55%}
+.page-mock .hero{height:26px;background:var(--panel2);border:1px solid var(--hair)}
+.page-mock .cols{display:flex;gap:5px;flex:1}
+.page-mock .cols i{flex:1;background:var(--panel2);border:1px solid var(--hair)}
+.page-mock .cols i:nth-child(2){flex:2}
+
+/* task tree */
+.tree{font:400 14px/1.5 var(--sans)}
+.trow{
+  display:grid;grid-template-columns:14px minmax(0,1fr) auto auto;
+  gap:4px 12px;align-items:center;
+  min-height:44px;padding:6px 0 6px 0;
+  border-bottom:1px solid var(--hair);
+  position:relative;
+}
+.trow:last-child{border-bottom:none}
+.trow .tw{grid-column:2;display:flex;align-items:baseline;gap:10px;min-width:0}
+.trow .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.trow .wb{font:400 12px/1 var(--mono);color:var(--tx2);white-space:nowrap}
+.trow .wb.hi{color:var(--tx);border:1px solid var(--hair2);padding:2px 6px}
+.trow .dur{font:400 12px/1 var(--mono);color:var(--tx3);text-align:right;min-width:44px}
+.trow .st{grid-column:1;justify-self:center}
+/* status glyphs */
+.sg{font:400 13px/1 var(--mono);width:14px;height:14px;display:inline-flex;
+  align-items:center;justify-content:center;color:var(--tx)}
+.sg.need{color:var(--tx);font-weight:700}
+.sg.fail{color:var(--tx);font-weight:700}
+.sg.done{color:var(--tx3)}
+.trow.done .nm{color:var(--tx3);text-decoration:line-through}
+.trow.done .wb,.trow.done .dur{color:#5c5c5c}
+/* L3 compact */
+.l3wrap{padding-left:26px;border-left:1px solid var(--hair2);margin-left:7px}
+.trow.l3{min-height:34px;grid-template-columns:14px minmax(0,1fr) auto auto;
+  font-size:13.5px;border-bottom:1px dashed var(--hair)}
+.trow.l3:last-child{border-bottom:none}
+.trow.l3 .nm{color:var(--tx2)}
+.trow.l3 .nm.need{color:var(--tx);border-bottom:1px solid var(--hair3)}
+.l4chip{
+  margin:8px 0 10px 26px;
+  display:inline-flex;align-items:center;gap:8px;
+  font:400 12px/1 var(--mono);color:var(--tx2);
+  border:1px dashed var(--hair2);padding:7px 12px;
+}
+.l4chip:hover{border-color:var(--tx);color:var(--tx)}
+/* tree header rollup */
+.tree-top{display:flex;align-items:center;gap:14px;margin-bottom:8px}
+.tree-top .roll{font:400 12px/1 var(--mono);color:var(--tx);
+  border:1px solid var(--hair2);padding:4px 8px}
+
+/* folded stream */
+.stream-h{
+  width:100%;display:flex;align-items:center;gap:12px;
+  min-height:52px;
+  font:600 14px/1 var(--sans);color:var(--tx);
+  transition:background var(--t);
+}
+.stream-h:hover .arrow{color:var(--tx)}
+.stream-h .arrow{font:400 13px/1 var(--mono);color:var(--tx3);transition:transform var(--t)}
+.stream.open .arrow{transform:rotate(90deg)}
+.stream-h .n{font:400 12px/1 var(--mono);color:var(--tx3);margin-left:auto}
+.stream-body{display:none;border-top:1px solid var(--hair);padding:14px 0 4px}
+.stream.open .stream-body{display:block}
+.stream-body pre{
+  font:400 12px/1.9 var(--mono);color:var(--tx3);
+  overflow-x:auto;white-space:pre;
+}
+.stream-body pre b{color:var(--tx2);font-weight:400}
+.stream-body pre .t{color:#555}
+.stream-body pre .hi{color:var(--tx)}
+
+/* ============ COMPOSER ============ */
+.composer-wrap{
+  border-top:1px solid var(--hair);
+  padding:16px 36px 18px;
+  background:var(--bg);
+  position:sticky;bottom:0;
+}
+.composer{
+  border:1px solid var(--hair2);
+  background:var(--panel);
+}
+.composer:focus-within{border-color:var(--tx)}
+.c-input{
+  display:flex;align-items:center;gap:10px;
+  min-height:52px;padding:0 18px;
+  border-bottom:1px solid var(--hair);
+}
+.c-input .cur{font:400 15px/1 var(--mono);color:var(--tx);animation:blink 1.06s steps(1) infinite}
+.c-input .ph{flex:1;font:400 14px/1 var(--mono);color:var(--tx3);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.kbd{
+  font:400 12px/1 var(--mono);color:var(--tx2);
+  border:1px solid var(--hair2);padding:4px 7px;
+}
+.c-dials{display:flex;align-items:center;gap:8px;padding:10px 14px;flex-wrap:wrap}
+.dial{
+  min-height:36px;padding:0 12px;
+  display:inline-flex;align-items:center;gap:8px;
+  border:1px solid var(--hair);
+  font:400 12.5px/1 var(--mono);color:var(--tx2);
+  transition:border-color var(--t),color var(--t);
+}
+.dial:hover{border-color:var(--tx);color:var(--tx)}
+.dial b{color:var(--tx);font-weight:400}
+.dial .lb{color:var(--tx3)}
+.c-hints{margin-left:auto;display:flex;gap:12px;align-items:center}
+.c-hints span{font:400 12px/1 var(--mono);color:#5c5c5c}
+.c-hints .kbd{padding:3px 6px}
+
+/* utility */
+.mut{color:var(--tx3)}
+.wb2{font:400 12px/1 var(--mono);color:var(--tx2)}
+</style>
+</head>
+<body>
+<div id="scan"></div>
+
+<div class="app">
+
+  <!-- ================= RAIL ================= -->
+  <aside class="rail reveal d1">
+    <div class="rail-brand">
+      <div class="logo">AICA</div>
+      <div class="sub">agent:local · v0.2</div>
+    </div>
+    <nav class="rail-nav">
+      <span class="micro">SEC — NAV</span>
+      <button class="nav-item active"><span class="n">01</span>需要你<span class="cnt inv" id="inboxCount">5</span></button>
+      <button class="nav-item"><span class="n">02</span>运行中<span class="cnt">3</span></button>
+      <button class="nav-item"><span class="n">03</span>任务库</button>
+      <button class="nav-item"><span class="n">04</span>项目·场景</button>
+      <button class="nav-item"><span class="n">05</span>系统态</button>
+    </nav>
+    <div class="rail-foot">
+      <div class="row"><span>daemon</span><span class="ok">●</span></div>
+      <div class="row"><span>server :8788</span><span class="ok">●</span></div>
+      <div class="theme-note">theme: none<br>monochrome is the theme</div>
+    </div>
+  </aside>
+
+  <!-- ================= COLUMN 01+02 : INBOX + RUNNING ================= -->
+  <main class="col col-inbox reveal d2">
+
+    <header class="sec-head">
+      <div class="ghost">01</div>
+      <span class="micro">SEC — 01 · INBOX</span>
+      <h1 class="sec-title"><span class="marker"></span>需要你</h1>
+      <div class="sec-meta"><em id="needCount">5 项待裁决</em> · 2 gate 阻塞下游 · err ×1</div>
+    </header>
+
+    <section class="cards">
+
+      <!-- ERR : inverted danger gate -->
+      <article class="card invert" data-state="needs" id="c1">
+        <div class="card-tag"><span class="inv">ERR</span><span class="mk">×</span>删除确认 — 不可逆操作<span class="path">gate/danger</span></div>
+        <h3>删除临时备份目录</h3>
+        <p class="desc"><span class="mono">D:\aica\backups\tmp-2025-11\</span> — 14.2 GB · 212 个文件。任务「磁盘清理」申请删除，超出自动权限。</p>
+        <div class="opts">
+          <button class="opt solid" data-v="已确认删除 · 14.2 GB">确认删除<span class="k">err</span></button>
+          <button class="opt" data-v="已取消 · 目录保留">取消</button>
+        </div>
+        <div class="verdict"></div>
+      </article>
+
+      <!-- inquiry gate -->
+      <article class="card" data-state="needs" id="c2">
+        <div class="card-tag"><span class="mk">▮</span>问询 — 快速选项<span class="path">gate/ask</span></div>
+        <h3>书库去重：3 份同名 PDF</h3>
+        <p class="desc">《Designing Interfaces》在 D:\aica\books 与书库各存一份，哈希不同。保留哪一份？</p>
+        <div class="opts">
+          <button class="opt" data-v="保留 D:\ 版（哈希新）">保留 D:\ 版</button>
+          <button class="opt" data-v="保留书库版（有批注）">保留书库版</button>
+          <button class="opt" data-v="两份都保留">都保留</button>
+        </div>
+        <div class="verdict"></div>
+      </article>
+
+      <!-- acceptance card -->
+      <article class="card" data-state="needs" id="c3">
+        <div class="card-tag"><span class="mk">▮</span>待验收产物<span class="path">accept</span></div>
+        <h3>《Agent 界面调研》摘要 v3</h3>
+        <p class="desc">
+          <span class="wb2" style="border:1px solid var(--hair2);padding:2px 7px">条款 3/5</span>
+          <span class="wb2" style="border:1px solid var(--hair2);padding:2px 7px;margin-left:6px">含源码引用</span>
+        </p>
+        <div class="opts">
+          <button class="opt solid" data-v="已通过 · 摘要 v3 入库">通过</button>
+          <button class="opt" data-v="已退回 · 附批注 2 条">退回修改</button>
+          <button class="opt" data-v="已打开全文">查看全文<span class="k">↗</span></button>
+        </div>
+        <div class="verdict"></div>
+      </article>
+
+      <!-- deep gate with breadcrumb -->
+      <article class="card" data-state="needs" id="c4">
+        <div class="card-tag"><span class="mk">▮</span>深层等待 — L3<span class="path">gate/deep</span></div>
+        <div class="crumb">调研各家 Agent 界面 <i>›</i> 调研 Claude Desktop <i>›</i> <b style="font-weight:400;color:var(--tx)">抓取 openclaudeui token 值</b></div>
+        <h3>token 性质判定</h3>
+        <p class="desc">抓到的凭据形如 <span class="mono">cdk_9f3a…e1</span>。这是 session token 还是 API key？决定后续刷新策略。</p>
+        <div class="opts">
+          <button class="opt" data-v="判定为 session token">session</button>
+          <button class="opt" data-v="判定为 API key">api key</button>
+          <button class="opt" data-v="都不是 · 升级人工排查">都不是</button>
+        </div>
+        <div class="verdict"></div>
+      </article>
+
+      <!-- failed -->
+      <article class="card failed" data-state="needs" id="c5">
+        <div class="card-tag"><span class="inv">×</span>执行失败 — 需要处置<span class="path">failed</span></div>
+        <h3>同步书库索引 → calibre</h3>
+        <p class="desc">连接 <span class="mono">127.0.0.1:8080</span> 超时（第 3 次重试仍失败）。上次裁决已放行，执行层报错。</p>
+        <div class="opts">
+          <button class="opt" data-v="已排入第 4 次重试">重试<span class="k">⌃R</span></button>
+          <button class="opt" data-v="已放弃 · 标记 skipped">放弃</button>
+        </div>
+        <div class="verdict"></div>
+      </article>
+
+      <!-- done (grammar demo) -->
+      <article class="card done" id="c6">
+        <div class="card-tag"><span class="mk">—</span>已裁决<span class="path">done</span></div>
+        <h3>端口 8788 占用裁决</h3>
+        <p class="desc">已选择「迁移 server 至 8789」。</p>
+        <div class="verdict" style="display:block">已裁决 · 迁移 server 至 8789 · 09:12</div>
+      </article>
+
+    </section>
+
+    <!-- ================= 02 RUNNING ================= -->
+    <header class="sec-head" style="padding-top:26px">
+      <div class="ghost" style="font-size:88px">02</div>
+      <span class="micro">SEC — 02 · RUNNING</span>
+      <h1 class="sec-title" style="font-size:30px"><span class="marker" style="background:transparent;border:1px solid var(--tx)"></span>正在运行</h1>
+      <div class="sec-meta">3 任务活跃 · <em>1 等待 person:answer</em></div>
+    </header>
+
+    <section class="runs">
+      <button class="run active" data-run="调研各家 Agent 界面">
+        <span class="runbox"><i></i></span>
+        <span class="subj">调研各家 Agent 界面</span>
+        <span class="t">12:04</span>
+        <span class="snip">walker → <b>L3 阻塞</b> <i class="wbadge">[person:answer]</i> token 性质待定</span>
+      </button>
+      <button class="run" data-run="书库索引同步">
+        <span class="runbox"><i></i></span>
+        <span class="subj">书库索引同步</span>
+        <span class="t">04:37</span>
+        <span class="snip">walker: <b>412/1,204</b> files · calibre 重连排队中</span>
+      </button>
+      <button class="run" data-run="生成摘要 v3">
+        <span class="runbox"><i></i></span>
+        <span class="subj">生成摘要 v3</span>
+        <span class="t">01:52</span>
+        <span class="snip">clause <b>3/5</b> · citing src L3-2 · draft→accept</span>
+      </button>
+    </section>
+
+    <div style="padding:18px 28px" class="micro">END OF INBOX — ▍</div>
+  </main>
+
+  <!-- ================= COLUMN 03 : TASK VIEW ================= -->
+  <section class="col col-task reveal d3">
+    <div class="task-scroll">
+
+      <header class="tv-head">
+        <div class="ghost">03</div>
+        <span class="micro">SEC — 03 · TASK VIEW</span>
+        <div class="tv-crumb">运行中 <i>›</i> <span class="cur" id="tvCrumb">调研各家 Agent 界面</span> <i>›</i> 根任务</div>
+      </header>
+
+      <!-- ROOT CARD -->
+      <div class="block">
+        <div class="block-label"><span class="micro"><b>ROOT</b> — 根卡</span><span class="ln"></span><span class="r">depth 4</span></div>
+        <div class="root">
+          <div class="root-id"><b>task_8f3a</b> · agent:local · spawned 09:41 · scene 调研</div>
+          <h2 id="tvTitle">调研各家 Agent 界面</h2>
+          <p class="obj">横向调研 Claude Desktop / Cursor / Windsurf 的界面结构与凭据存储形态，产出对比矩阵与可复用 token 抓取路径。</p>
+          <span class="rollup">祖先上卷 · 1 待处理</span>
+
+          <div class="accept">
+            <span class="micro">ACCEPT — 验收标准 <b>5 条</b></span>
+            <div class="chips" id="chips">
+              <button class="chip" data-s="verified"><span class="g">■</span><span class="st">覆盖 ≥3 款界面</span><span class="cls">条款1</span></button>
+              <button class="chip" data-s="verified"><span class="g">■</span><span class="st">token 抓取路径</span><span class="cls">条款2</span></button>
+              <button class="chip" data-s="failed"><span class="g">×</span><span class="st">截图归档完整性</span><span class="cls">条款3</span></button>
+              <button class="chip" data-s="pending"><span class="g">□</span><span class="st">价格与档位对比</span><span class="cls">条款4</span></button>
+              <button class="chip" data-s="human"><span class="g">▮</span><span class="st">token 性质判定</span><span class="cls">条款5</span></button>
+              <span class="chip delta"><span class="plus">+2</span><span class="st">验收标准 · 增量</span></span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- FACT CARDS -->
+      <div class="block">
+        <div class="block-label"><span class="micro"><b>FACTS</b> — 子节点结论 · 溯源</span><span class="ln"></span><span class="r">3 / 7 cited</span></div>
+        <div class="facts">
+          <div class="fact">
+            <div class="mk">F-01</div>
+            <p>Claude Desktop 凭据存于 localStorage，键 <span class="mono">claude-app</span>，随窗口会话重建。</p>
+            <div class="src"><b>src:</b> L3-2 · net-capture · 09:47</div>
+          </div>
+          <div class="fact">
+            <div class="mk">F-02</div>
+            <p>Cursor 会话封存于 <span class="mono">state.vscdb</span>（SQLite），字段 <span class="mono">cursorAuth</span>。</p>
+            <div class="src"><b>src:</b> L3-4 · fs-scan · 09:52</div>
+          </div>
+          <div class="fact">
+            <div class="mk">F-03</div>
+            <p>Windsurf 采用 cascade 面板架构，token 由后端代理注入，前端不可见。</p>
+            <div class="src"><b>src:</b> L3-5 · docs · 10:03</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ARTIFACTS -->
+      <div class="block">
+        <div class="block-label"><span class="micro"><b>ARTIFACTS</b> — 产物行</span><span class="ln"></span><span class="r">md / diff / page</span></div>
+        <div class="arts">
+          <div class="art">
+            <div class="ah"><span class="fn">agent-ui-survey.md</span><span class="ft">MD</span></div>
+            <div class="body">
+              <span class="h"># Agent 界面调研</span><br>
+              - Claude Desktop · token 于 localStorage<br>
+              - Cursor · state.vscdb / cursorAuth<br>
+              - Windsurf · cascade 代理注入
+            </div>
+            <div class="stats">12 KB · 摘要 v3 源稿</div>
+          </div>
+          <div class="art">
+            <div class="ah"><span class="fn">notes/survey.md</span><span class="ft">DIFF</span></div>
+            <div class="body">
+              <span class="plus">+ ## token 抓取路径</span><br>
+              <span class="plus">+ cdk_ 前缀 → session?</span><br>
+              <span class="minus">- ~~token 固定为 UUID~~</span>
+            </div>
+            <div class="stats"><span class="plus" style="color:var(--tx)">+128</span> <span class="minus" style="text-decoration:none">−46</span> · uncommitted</div>
+          </div>
+          <div class="art">
+            <div class="ah"><span class="fn">capture-claude.html</span><span class="ft">PAGE</span></div>
+            <div class="page-mock">
+              <div class="bar w40"></div>
+              <div class="hero"></div>
+              <div class="cols"><i></i><i></i><i></i></div>
+              <div class="bar w70"></div>
+              <div class="bar w55"></div>
+            </div>
+            <div class="stats">迷你网页预览 · 10:03</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- TASK TREE -->
+      <div class="block">
+        <div class="block-label"><span class="micro"><b>TREE</b> — 缩进任务树</span><span class="ln"></span><span class="r">L2/L3/L4+</span></div>
+        <div class="tree">
+          <div class="tree-top">
+            <span class="micro" style="color:var(--tx2)">CHILDREN OF task_8f3a</span>
+            <span class="roll">↩ 祖先 · 1 待处理</span>
+          </div>
+
+          <!-- L2 row -->
+          <div class="trow">
+            <span class="st"><span class="runbox" style="display:inline-block;vertical-align:-2px"><i></i></span></span>
+            <span class="tw"><span class="nm" style="font-weight:600">调研 Claude Desktop</span></span>
+            <span class="wb hi">1 待处理</span>
+            <span class="dur">04:12</span>
+          </div>
+          <div class="l3wrap">
+            <!-- L3 compact -->
+            <div class="trow l3">
+              <span class="st"><span class="sg need">▮</span></span>
+              <span class="tw"><span class="nm need">抓取 openclaudeui token 值</span><span class="wb">[person:answer]</span></span>
+              <span class="wb"></span>
+              <span class="dur">02:40</span>
+            </div>
+            <div class="trow l3">
+              <span class="st"><span class="runbox" style="display:inline-block;width:10px;height:10px;vertical-align:-1px"><i></i></span></span>
+              <span class="tw"><span class="nm">归档界面截图</span><span class="wb">[dependency]</span></span>
+              <span class="wb">▓▓▓░░ 62%</span>
+              <span class="dur">01:05</span>
+            </div>
+            <button class="l4chip">L4+ · 6 个更深层子任务已聚合 ▸</button>
+          </div>
+
+          <div class="trow">
+            <span class="st"><span class="sg">□</span></span>
+            <span class="tw"><span class="nm">调研 Cursor</span><span class="wb">[queued]</span></span>
+            <span class="wb"></span>
+            <span class="dur">—</span>
+          </div>
+          <div class="trow">
+            <span class="st"><span class="sg">□</span></span>
+            <span class="tw"><span class="nm">汇总对比矩阵</span><span class="wb">[dependency]</span></span>
+            <span class="wb">▓░░░░ 12%</span>
+            <span class="dur">00:31</span>
+          </div>
+          <div class="trow done">
+            <span class="st"><span class="sg done">■</span></span>
+            <span class="tw"><span class="nm">调研 Windsurf</span></span>
+            <span class="wb">done</span>
+            <span class="dur">06:58</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- FOLDED STREAM -->
+      <div class="block stream" id="stream">
+        <button class="stream-h" id="streamH">
+          <span class="arrow">▸</span>过程与证据
+          <span class="n">stream · 24 events · folded</span>
+        </button>
+        <div class="stream-body">
+          <pre><span class="t">09:41:02</span>  spawn      walker → openclaudeui profile
+<span class="t">09:41:08</span>  capture    localStorage[<b>claude-app</b>] hit
+<span class="t">09:41:12</span>  <span class="hi">gate → [person:answer]</span>  token 性质待定
+<span class="t">09:41:12</span>  suspend    L3-2 · waits_on person:answer
+<span class="t">09:42:30</span>  spawn      fs-scan → state.vscdb
+<span class="t">09:44:51</span>  fact       F-02 committed <b>cursorAuth</b>
+<span class="t">09:47:03</span>  artifact   capture-claude.html written
+<span class="t">09:52:19</span>  clause     条款3 → <span class="hi">× failed</span>（截图缺 2 张）</pre>
+        </div>
+      </div>
+
+    </div><!-- /task-scroll -->
+
+    <!-- ================= COMPOSER ================= -->
+    <div class="composer-wrap">
+      <div class="composer">
+        <div class="c-input">
+          <span class="cur">▍</span>
+          <span class="ph" id="cph">输入指令，或继续裁决「需要你」…</span>
+          <span class="kbd">⌘↵ 发送</span>
+        </div>
+        <div class="c-dials">
+          <button class="dial" data-cycle="任务|提问|场景"><span class="lb">模式</span><b>任务</b></button>
+          <button class="dial" data-cycle="标准|受限|开放"><span class="lb">权限</span><b>标准</b></button>
+          <button class="dial" data-cycle="qwen3-32b|qwen3-8b|deepseek-r1"><span class="lb">模型</span><b>qwen3-32b</b></button>
+          <button class="dial" data-cycle="low|med|high"><span class="lb">effort</span><b>high</b></button>
+          <div class="c-hints">
+            <span><span class="kbd">⌘K</span> 命令</span>
+            <span><span class="kbd">⌘.</span> 拨盘</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+</div>
+
+<script>
+(function(){
+  "use strict";
+  var $ = function(s){ return document.querySelector(s); };
+  var $$ = function(s){ return Array.prototype.slice.call(document.querySelectorAll(s)); };
+
+  /* ---------- inbox: resolve a card ---------- */
+  var needLeft = 5;
+  function syncCounts(){
+    var el = $("#inboxCount"), el2 = $("#needCount");
+    if(el) el.textContent = needLeft;
+    if(el2) el2.textContent = needLeft + " 项待裁决";
+  }
+  $$(".card .opt").forEach(function(btn){
+    btn.addEventListener("click", function(){
+      var card = btn.closest(".card");
+      if(!card || card.classList.contains("done")) return;
+      card.classList.add("done");
+      card.setAttribute("data-state","done");
+      var tag = card.querySelector(".card-tag");
+      var path = tag.querySelector(".path");
+      tag.innerHTML = '<span class="mk">—</span>已裁决' + (path ? '<span class="path">'+path.textContent+'</span>' : '');
+      var v = card.querySelector(".verdict");
+      if(v) v.textContent = (btn.getAttribute("data-v") || btn.textContent) + " · " + nowTime();
+      if(card.classList.contains("invert")){
+        /* inverted danger card defuses to hollow outline */
+      }
+      if(needLeft > 0) needLeft--;
+      syncCounts();
+    });
+  });
+  function nowTime(){
+    var d = new Date();
+    return ("0"+d.getHours()).slice(-2) + ":" + ("0"+d.getMinutes()).slice(-2);
+  }
+
+  /* ---------- nav ---------- */
+  $$(".nav-item").forEach(function(n){
+    n.addEventListener("click", function(){
+      $$(".nav-item").forEach(function(x){ x.classList.remove("active"); });
+      n.classList.add("active");
+    });
+  });
+
+  /* ---------- running strip: drill ---------- */
+  $$(".run").forEach(function(r){
+    r.addEventListener("click", function(){
+      $$(".run").forEach(function(x){ x.classList.remove("active"); });
+      r.classList.add("active");
+      var name = r.getAttribute("data-run") || r.querySelector(".subj").textContent;
+      var crumb = $("#tvCrumb"), title = $("#tvTitle");
+      if(crumb) crumb.textContent = name;
+      if(title) title.textContent = name;
+    });
+  });
+
+  /* ---------- accept chips: square toggles ---------- */
+  var CYCLE = ["verified","pending","human","failed"];
+  var GLYPH = { verified:"■", pending:"□", human:"▮", failed:"×" };
+  $$("#chips .chip[data-s]").forEach(function(ch){
+    ch.addEventListener("click", function(){
+      var cur = ch.getAttribute("data-s");
+      var next = CYCLE[(CYCLE.indexOf(cur)+1) % CYCLE.length];
+      ch.setAttribute("data-s", next);
+      ch.querySelector(".g").textContent = GLYPH[next];
+    });
+  });
+
+  /* ---------- folded stream ---------- */
+  var stream = $("#stream"), sh = $("#streamH");
+  if(sh) sh.addEventListener("click", function(){ stream.classList.toggle("open"); });
+
+  /* ---------- composer dials ---------- */
+  $$(".dial").forEach(function(d){
+    d.addEventListener("click", function(){
+      var opts = d.getAttribute("data-cycle").split("|");
+      var b = d.querySelector("b");
+      var i = opts.indexOf(b.textContent);
+      b.textContent = opts[(i+1) % opts.length];
+    });
+  });
+
+  /* ---------- L4+ aggregate chip ---------- */
+  $$(".l4chip").forEach(function(c){
+    c.addEventListener("click", function(){
+      c.textContent = (c.textContent.indexOf("▾") > -1)
+        ? "L4+ · 6 个更深层子任务已聚合 ▸"
+        : "L4+ · 已展开聚合视图（演示）▾";
+    });
+  });
+})();
+</script>
+</body>
+</html>

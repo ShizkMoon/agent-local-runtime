@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // ar CLI：无状态命令面。evd/受限入口/人工共用，统一 JSON envelope 输出
-import { createRun, writeSpec, readSpec, readResult, writeResult, checkRun, appendEvent, RUNS_DIR, runsDir } from "./runs.ts";
+import { createRun, writeSpec, readSpec, readResult, writeResult, checkRun, appendEvent, writeGate, resolveWaiting, RUNS_DIR, runsDir } from "./runs.ts";
 import { daemonLoop } from "./daemon.ts";
 import type { SpecEnvelope, NodeStatus } from "./envelope.ts";
 
@@ -75,7 +75,19 @@ async function main(): Promise<void> {
       if (!spec) return out(false, cmd, undefined, { code: "NO_NODE", path });
       spec.reply = [...(spec.reply ?? []), { text: arg("--text") ?? (await readStdin()).trim(), ts: new Date().toISOString() }];
       writeSpec(rootId, path, spec);
-      return out(true, cmd, { node: spec.id });
+      // 隐式 resume：waiting 节点的 result 归档为 result.resolved.json，daemon 下一轮重新拉起
+      const resumed = resolveWaiting(rootId, path);
+      return out(true, cmd, { node: spec.id, resumed });
+    }
+    case "gate": {
+      // Worker 侧调用（ev_gate 工具）：写 waiting result + gate.json，节点挂起等人工回复
+      const rootId = process.env.AR_ROOT_ID ?? arg("--run")!;
+      const path = process.env.AR_NODE_PATH ?? arg("--node") ?? "root";
+      const question = arg("--question") ?? (await readStdin()).trim();
+      const opts = arg("--opts")?.split(";").filter(Boolean);
+      writeGate(rootId, path, { question, ...(opts?.length ? { opts } : {}) });
+      const r = writeResult(rootId, path, { status: "waiting", summary: question });
+      return out(true, cmd, r);
     }
     case "done":
     case "fail": {
@@ -105,7 +117,7 @@ async function main(): Promise<void> {
     default:
       return out(false, "help", undefined, {
         code: "USAGE",
-        commands: ["run-create", "dispatch", "node-create", "check", "reply", "done", "fail", "event", "daemon", "version"],
+        commands: ["run-create", "dispatch", "node-create", "check", "reply", "gate", "done", "fail", "event", "daemon", "version"],
       });
   }
 }

@@ -16,7 +16,7 @@ const INDEX = join(RUNS_DIR, "index.jsonl");
 const running = new Set<string>();
 
 // 协议工具恒授（不写 result 就回收不了节点）；敏感工具须 spec.tools 显式声明
-const PROTOCOL_TOOLS = ["ev_done", "ev_fail"];
+const PROTOCOL_TOOLS = ["ev_done", "ev_fail", "ev_gate"];
 const DEFAULT_PI_TOOLS = [
   "read", "write", "edit", "bash", "powershell", "ls", "find", "grep",
   ...PROTOCOL_TOOLS, "kn_recall", "ar_read",
@@ -57,8 +57,8 @@ function toolAllowlist(spec: SpecEnvelope): string[] {
   return DEFAULT_PI_TOOLS;
 }
 
-/** user message = 变量部分（worker.md 规则走 --append-system-prompt 保证前缀稳定可缓存） */
-function userMessage(spec: SpecEnvelope): string {
+/** user message = 变量部分（worker.md 规则走 --append-system-prompt 保证前缀稳定可缓存）；resumed = waiting 回复后恢复拉起 */
+function userMessage(spec: SpecEnvelope, resumed = false): string {
   const lines = [spec.goal, "", "## 节点上下文"];
   lines.push(`- node_id: ${spec.id}`);
   if (spec.accept?.length) lines.push("- accept:", ...spec.accept.map((a) => `  - ${a}`));
@@ -70,12 +70,13 @@ function userMessage(spec: SpecEnvelope): string {
   if (spec.reply?.length) {
     lines.push("", "## 人工回复");
     for (const r of spec.reply) lines.push(`- [${r.ts}] ${r.text}`);
+    if (resumed) lines.push("- [恢复] 此前你已提问，人工回复见上");
   }
   return lines.join("\n");
 }
 
 /** Worker 拉起命令：按 spec.agent 选 launcher */
-function launcher(spec: SpecEnvelope): { file: string; args: string[]; desc: string } {
+function launcher(spec: SpecEnvelope, resumed = false): { file: string; args: string[]; desc: string } {
   const agent = spec.agent ?? "pi";
   switch (agent) {
     case "pi": {
@@ -92,7 +93,7 @@ function launcher(spec: SpecEnvelope): { file: string; args: string[]; desc: str
         "--tools", toolAllowlist(spec).join(","),
         "-e", join(AICA_PI, "extensions", "events.ts"),
         "-e", join(AICA_PI, "extensions", "tools.ts"),
-        "--", userMessage(spec),
+        "--", userMessage(spec, resumed),
       ];
       return { file: process.execPath, args, desc: `node ${cli} -p ... [${agent}/${profile} ${model}]` };
     }
@@ -120,12 +121,12 @@ function workerEnv(rootId: string, path: string): NodeJS.ProcessEnv {
   return env;
 }
 
-function spawnWorker(rootId: string, path: string, spec: SpecEnvelope): void {
+function spawnWorker(rootId: string, path: string, spec: SpecEnvelope, resumed = false): void {
   const dir = join(RUNS_DIR, rootId, "nodes", path);
   running.add(spec.id);
   let file: string, args: string[], desc: string;
   try {
-    ({ file, args, desc } = launcher(spec));
+    ({ file, args, desc } = launcher(spec, resumed));
   } catch (e) {
     running.delete(spec.id);
     appendEvent(rootId, path, { kind: "exit", data: { code: -1, error: `launcher: ${String(e)}` } });
@@ -168,9 +169,9 @@ export async function daemonLoop(opts: DaemonOptions = {}): Promise<void> {
   indexLog({ event: "daemon_start", once: !!opts.once, pid: process.pid });
   for (;;) {
     try {
-      for (const { rootId, path, spec } of pendingNodes()) {
+      for (const { rootId, path, spec, resumed } of pendingNodes()) {
         if (running.size >= MAX_WORKERS || running.has(spec.id)) continue;
-        spawnWorker(rootId, path, spec);
+        spawnWorker(rootId, path, spec, !!resumed);
       }
       if (opts.once && running.size === 0 && pendingNodes().length === 0) break;
     } catch (e) {

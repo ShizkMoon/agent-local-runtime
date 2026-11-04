@@ -1,0 +1,1073 @@
+<!doctype html>
+<!--
+  AICA 工作台 — 单文件设计原型（无依赖，file:// 直接打开）
+  依据 ai-collab-assistant/docs/workbench-ui.md §7 定稿：令牌 §7.2 / 布局 §7.1 /
+  组件 §7.3 / 五态 §7.4 / 调研吸收 §7.6。全部为静态 mock 数据。
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AICA 工作台 — 设计原型</title>
+<style>
+/* ============================== §7.2 设计令牌 ============================== */
+:root{
+  --bg:#0b0d10; --s1:#111418; --s2:#161b21; --s3:#1c222a; --overlay:#1f2630f2;
+  --line:rgba(255,255,255,.06); --line-hi:rgba(255,255,255,.12);
+  --t1:#e8ecf1; --t2:#9aa4b0; --t3:#5f6b78;
+  --accent:#6ee7ff;
+  --ok:#4ade80; --warn:#fbbf24; --err:#f87171; --run:#6ee7ff; --info:#a78bfa;
+  /* 工具色阶：仅用于工具卡左缘 3px 色条与 icon */
+  --tk-file:#7aa2f7; --tk-bash:#9ece6a; --tk-ps:#22d3ee; --tk-desktop:#e0a35c;
+  --tk-browser:#a78bfa; --tk-kn:#d9a820; --tk-ar:#f472b6; --tk-ev:#8b95a1; --tk-misc:#5f6b78;
+  --r-sm:7px; --r-md:10px; --r-lg:14px; --r-pill:999px;
+  --sh-card:0 1px 0 rgba(255,255,255,.04) inset,0 1px 3px rgba(0,0,0,.4);
+  --sh-pop:0 8px 32px rgba(0,0,0,.55);
+  --d-fast:150ms; --d-med:220ms; --d-slow:320ms;
+  --ease:cubic-bezier(.2,.8,.2,1);
+  --spring:cubic-bezier(.34,1.3,.64,1);      /* Claude 式过弹簧：sheet 滑入 / jump pill */
+  --f-prose:system-ui,-apple-system,"Segoe UI","Microsoft YaHei",sans-serif;
+  --f-mono:ui-monospace,"Cascadia Code",Consolas,"Microsoft YaHei UI",monospace;
+  --railw:260px; --sheetw:400px;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{
+  background:var(--bg); color:var(--t1);
+  font:13.5px/1.68 var(--f-prose);
+  overflow:hidden;
+  -webkit-font-smoothing:antialiased;
+}
+.mono{font-family:var(--f-mono);font-size:12px;letter-spacing:.02em}
+::selection{background:#6ee7ff2e}
+:focus-visible{outline:1px solid var(--accent);outline-offset:1px;border-radius:4px}
+button{font:inherit;color:inherit;background:none;border:none;cursor:pointer}
+/* 薄滚动条 */
+::-webkit-scrollbar{width:9px;height:9px}
+::-webkit-scrollbar-thumb{background:#ffffff14;border:3px solid transparent;border-radius:8px;background-clip:content-box}
+::-webkit-scrollbar-thumb:hover{background:#ffffff24;background-clip:content-box;border:3px solid transparent}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-corner{background:transparent}
+
+/* ============================== §7.1 三区骨架 ============================== */
+#app{
+  display:grid; height:100vh;
+  grid-template-columns:var(--railw) minmax(0,1fr) var(--sheetw);
+  transition:grid-template-columns var(--d-slow) var(--spring);  /* sheet 滑入过弹簧（§7.6 Claude） */
+}
+#app.min{--railw:56px}
+#app.nosheet{--sheetw:0px}
+
+/* ---------------- 左轨 Runs ---------------- */
+#rail{
+  background:var(--s1); border-right:1px solid var(--line);
+  display:flex; flex-direction:column; min-width:0; overflow:hidden;
+}
+.rail-head{
+  display:flex; align-items:center; gap:8px;
+  padding:12px 12px 10px; border-bottom:1px solid var(--line); flex:none;
+}
+.brand-glyph{color:var(--accent);font-size:15px;text-shadow:0 0 18px #6ee7ff55;flex:none}
+.brand-t{font-family:var(--f-mono);font-size:11px;letter-spacing:.18em;color:var(--t2);text-transform:uppercase;white-space:nowrap}
+#app.min .brand-t{display:none}
+.rail-scroll{flex:1;overflow-y:auto;padding:10px 8px 14px;min-height:0}
+.g-label{
+  font-family:var(--f-mono);font-size:10px;letter-spacing:.16em;text-transform:uppercase;
+  color:var(--t3);padding:6px 8px 6px;
+}
+#app.min .g-label{text-align:center;padding:6px 0;font-size:0}
+#app.min .g-label::after{content:"···";font-size:10px;letter-spacing:0}
+
+/* RunListItem — T3 Sidebar v2 富卡片（活跃区） */
+.rc{
+  position:relative; border-radius:var(--r-md); padding:9px 10px 8px 12px;
+  margin-bottom:4px; cursor:pointer; border:1px solid transparent;
+  transition:background var(--d-fast) var(--ease),border-color var(--d-fast) var(--ease);
+}
+.rc:hover{background:var(--s2)}
+.rc.sel{background:var(--s2);border-color:var(--line)}
+.rc.sel::before{                       /* 选中左缘 2px accent 条 */
+  content:"";position:absolute;left:0;top:8px;bottom:8px;width:2px;
+  background:var(--accent);border-radius:2px;
+}
+.rc-subject{font-size:13px;font-weight:550;color:var(--t1);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-bottom:3px}
+.rc-meta{display:flex;align-items:center;gap:6px;font-family:var(--f-mono);font-size:11px;color:var(--t3);letter-spacing:.02em}
+.rc-last{
+  font-size:11.5px;font-style:italic;color:var(--t3);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px;
+}
+.rc .noti{                             /* Muse「值得通知」徽标 */
+  position:absolute;right:8px;top:9px;min-width:15px;height:15px;border-radius:8px;
+  background:var(--warn);color:#15181d;font-family:var(--f-mono);font-size:9.5px;
+  display:flex;align-items:center;justify-content:center;padding:0 4px;font-weight:700;
+}
+/* 状态点 / 运行脉冲环 */
+.dot{width:7px;height:7px;border-radius:50%;flex:none;position:relative}
+.dot.run{background:var(--run)}
+.dot.run::after{
+  content:"";position:absolute;inset:-3px;border-radius:50%;
+  border:1px solid var(--run);animation:ring 1.6s var(--ease) infinite;
+}
+@keyframes ring{
+  0%{transform:scale(.55);opacity:.9}
+  80%,100%{transform:scale(1.5);opacity:0}
+}
+.dot.ok{background:var(--ok)} .dot.warn{background:var(--warn)}
+.dot.err{background:var(--err)} .dot.idle{background:var(--t3)}
+
+/* 已沉降 — 紧凑单行 */
+.rs{
+  display:flex;align-items:center;gap:8px;padding:5px 8px;border-radius:var(--r-sm);
+  cursor:pointer;transition:background var(--d-fast) var(--ease);
+}
+.rs:hover{background:var(--s2)}
+.rs-t{flex:1;min-width:0;font-size:12px;color:var(--t2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.rs-time{font-family:var(--f-mono);font-size:10.5px;color:var(--t3);flex:none}
+/* 折叠为 56px 图标轨 */
+#app.min .rail-scroll{padding:10px 6px}
+#app.min .rc{padding:8px 0;margin-bottom:2px;display:flex;justify-content:center}
+#app.min .rc::before{display:none}
+#app.min .rc.sel{background:transparent;border-color:transparent}
+#app.min .rc-subject,#app.min .rc-last,#app.min .noti{display:none}
+#app.min .rc-meta{display:flex;justify-content:center}
+#app.min .rc-meta span{display:none}
+#app.min .rc .dot::after{inset:-4px}
+#app.min .rs{justify-content:center;padding:6px 0}
+#app.min .rs-t,#app.min .rs-time{display:none}
+
+/* 左下系统态区 */
+.rail-sys{
+  flex:none;border-top:1px solid var(--line);padding:10px;
+  display:flex;flex-wrap:wrap;gap:6px;align-items:center;background:var(--s1);
+}
+.sys-chip{
+  font-family:var(--f-mono);font-size:10.5px;letter-spacing:.04em;color:var(--t2);
+  border:1px solid var(--line);border-radius:var(--r-pill);padding:2px 9px;
+  display:inline-flex;align-items:center;gap:5px;white-space:nowrap;background:var(--s2);
+}
+.sys-chip .dot{width:6px;height:6px}
+#rail-toggle{
+  margin-left:auto;width:24px;height:24px;border-radius:var(--r-sm);
+  color:var(--t3);font-family:var(--f-mono);font-size:12px;flex:none;
+  border:1px solid var(--line);transition:all var(--d-fast) var(--ease);
+}
+#rail-toggle:hover{color:var(--t1);border-color:var(--line-hi);background:var(--s2)}
+#app.min .rail-sys{justify-content:center;padding:10px 4px}
+#app.min .sys-chip{display:none}
+#app.min .rail-sys::before{
+  content:"";width:7px;height:7px;border-radius:50%;background:var(--ok);
+  box-shadow:0 0 8px #4ade8066;
+}
+#app.min #rail-toggle{margin-left:0}
+
+/* ---------------- 中央：run 头 + gate 条 + 流 + composer ---------------- */
+#main{display:flex;flex-direction:column;min-width:0;background:var(--bg);position:relative}
+#run-head{
+  flex:none;padding:12px 22px 10px;border-bottom:1px solid var(--line);
+  display:flex;flex-direction:column;gap:7px;background:var(--bg);
+}
+.rh-top{display:flex;align-items:baseline;gap:10px;min-width:0}
+.rh-subject{font-size:14.5px;font-weight:600;letter-spacing:.01em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.agg{
+  font-family:var(--f-mono);font-size:10.5px;letter-spacing:.06em;flex:none;
+  border-radius:var(--r-pill);padding:1.5px 9px;border:1px solid;
+}
+.agg.run{color:var(--run);border-color:#6ee7ff55;background:#6ee7ff0d;animation:aggp 1.5s var(--ease) infinite}
+@keyframes aggp{50%{box-shadow:0 0 0 3px #6ee7ff14}}
+.agg.ok{color:var(--ok);border-color:#4ade8044;background:#4ade800d}
+.agg.warn{color:var(--warn);border-color:#fbbf2444;background:#fbbf240d}
+.rh-row2{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.npill{
+  font-family:var(--f-mono);font-size:10.5px;letter-spacing:.04em;color:var(--t3);
+  border:1px solid var(--line);border-radius:var(--r-pill);padding:1.5px 10px;
+  transition:all var(--d-fast) var(--ease);
+}
+.npill:hover{color:var(--t2);border-color:var(--line-hi)}
+.npill.on{color:var(--accent);border-color:#6ee7ff55;background:#6ee7ff10}
+.rh-stats{margin-left:auto;font-family:var(--f-mono);font-size:11px;color:var(--t3);letter-spacing:.03em;white-space:nowrap}
+.rh-stats b{color:var(--t2);font-weight:500}
+
+/* gate 置顶细条（§7.4 等待态） */
+#gate-banner{
+  flex:none;display:flex;align-items:center;gap:9px;
+  padding:6px 22px;font-size:12px;color:var(--warn);
+  background:linear-gradient(180deg,#fbbf2410,#fbbf2406);
+  border-bottom:1px solid #fbbf2426;
+}
+#gate-banner .gb-node{font-family:var(--f-mono);font-size:11px;color:var(--t2)}
+#gate-banner button{
+  margin-left:auto;font-family:var(--f-mono);font-size:10.5px;color:var(--warn);
+  border:1px solid #fbbf2440;border-radius:var(--r-pill);padding:1px 10px;
+  transition:all var(--d-fast) var(--ease);
+}
+#gate-banner button:hover{background:#fbbf2414}
+#gate-banner.hide{display:none}
+
+/* 流容器 + 28px 上下滚动渐隐（Claude 吸收） */
+#stream-wrap{flex:1;position:relative;min-height:0;display:flex;flex-direction:column}
+#stream{flex:1;overflow-y:auto;padding:18px 0 96px;scroll-behavior:smooth}
+.s-fade{
+  position:absolute;left:0;right:0;height:28px;pointer-events:none;z-index:3;
+}
+.s-fade.top{top:0;background:linear-gradient(180deg,var(--bg),transparent)}
+.s-fade.bot{bottom:0;background:linear-gradient(0deg,var(--bg),transparent)}
+
+.item{max-width:840px;margin:0 auto;padding:0 26px}
+.item+.item{margin-top:14px}
+.item.enter{animation:enter var(--d-med) var(--ease) both}
+@keyframes enter{from{opacity:0;transform:translateY(7px)}to{opacity:1;transform:none}}
+.item.dim{opacity:.28;filter:saturate(.4);transition:opacity var(--d-med) var(--ease)}
+
+/* MessageBubble（§7.3）：user 浅底小框右对齐 / assistant prose 直排 + 细 accent 左线 */
+.umsg{display:flex;justify-content:flex-end}
+.umsg .u{
+  max-width:72%;background:var(--s3);border:1px solid var(--line-hi);
+  border-radius:var(--r-md);padding:6px 12px;font-size:13px;color:var(--t1);
+  box-shadow:var(--sh-card);
+}
+.umsg .u .who{display:block;font-family:var(--f-mono);font-size:9.5px;letter-spacing:.12em;color:var(--t3);text-transform:uppercase;margin-bottom:2px}
+.amsg{max-width:82%;padding:2px 0 2px 14px;border-left:2px solid #6ee7ff3d}
+.amsg p{margin-bottom:8px;color:var(--t1)}
+.amsg p:last-child{margin-bottom:0}
+.amsg .frag{color:var(--t2)}
+.cursor{
+  display:inline-block;color:var(--accent);font-weight:600;margin-left:2px;
+  animation:blink 1.06s steps(1) infinite;transform:translateY(1px);
+}
+@keyframes blink{50%{opacity:0}}
+
+/* ToolCard（§7.3）：头单行 + 3px 工具色左缘 + args/result 标记块 */
+.tc{
+  background:var(--s2);border:1px solid var(--line);border-left:3px solid var(--tk-misc);
+  border-radius:var(--r-md);box-shadow:var(--sh-card);overflow:hidden;
+  transition:border-color var(--d-fast) var(--ease);
+}
+.tc.tk-file{border-left-color:var(--tk-file)}   .tc.tk-bash{border-left-color:var(--tk-bash)}
+.tc.tk-ps{border-left-color:var(--tk-ps)}       .tc.tk-desktop{border-left-color:var(--tk-desktop)}
+.tc.tk-browser{border-left-color:var(--tk-browser)} .tc.tk-kn{border-left-color:var(--tk-kn)}
+.tc.tk-ar{border-left-color:var(--tk-ar)}       .tc.tk-ev{border-left-color:var(--tk-ev)}
+.tc.tk-file .tico{color:var(--tk-file)}   .tc.tk-bash .tico{color:var(--tk-bash)}
+.tc.tk-ps .tico{color:var(--tk-ps)}       .tc.tk-desktop .tico{color:var(--tk-desktop)}
+.tc.tk-browser .tico{color:var(--tk-browser)} .tc.tk-kn .tico{color:var(--tk-kn)}
+.tc.tk-ar .tico{color:var(--tk-ar)}       .tc.tk-ev .tico{color:var(--tk-ev)}
+.tc.err{border-color:#f8717155;border-left-color:var(--err)}
+.tc-head{
+  display:flex;align-items:center;gap:8px;padding:7px 10px;cursor:pointer;
+  user-select:none;min-width:0;
+}
+.tc-head:hover{background:#ffffff04}
+.tico{font-family:var(--f-mono);font-size:12px;width:15px;text-align:center;flex:none}
+.tname{font-family:var(--f-mono);font-size:12px;font-weight:600;color:var(--t1);flex:none}
+.tprev{
+  font-family:var(--f-mono);font-size:11px;color:var(--t3);flex:1;min-width:0;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;letter-spacing:.01em;
+}
+.tdur{font-family:var(--f-mono);font-size:11px;color:var(--t3);flex:none}
+.tdur.live{color:var(--run)}
+.chip{
+  font-family:var(--f-mono);font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;
+  border:1px solid;border-radius:var(--r-pill);padding:.5px 7px;flex:none;
+}
+.chip.ok{color:var(--ok);border-color:#4ade8040}
+.chip.err{color:var(--err);border-color:#f8717148}
+.chip.run{color:var(--run);border-color:#6ee7ff50;animation:chipp 1.4s var(--ease) infinite}
+@keyframes chipp{50%{box-shadow:0 0 0 3px #6ee7ff14}}
+.tchev{color:var(--t3);font-size:10px;flex:none;transition:transform var(--d-fast) var(--ease);padding:2px}
+.tc.open .tchev{transform:rotate(180deg)}
+.tsheet{
+  color:var(--t3);font-size:11px;flex:none;padding:2px 4px;border-radius:4px;
+  transition:all var(--d-fast) var(--ease);
+}
+.tsheet:hover{color:var(--accent);background:#6ee7ff10}
+.tc-body{display:none;border-top:1px solid var(--line);padding:8px 10px 10px}
+.tc.open .tc-body{display:block;animation:enter var(--d-med) var(--ease)}
+.blk{margin-bottom:8px}
+.blk:last-child{margin-bottom:0}
+.blk-label{
+  font-family:var(--f-mono);font-size:9.5px;letter-spacing:.14em;text-transform:uppercase;
+  color:var(--t3);margin-bottom:4px;
+}
+.blk pre{
+  font-family:var(--f-mono);font-size:11.5px;line-height:1.6;color:var(--t2);
+  background:var(--bg);border:1px solid var(--line);border-radius:var(--r-sm);
+  padding:8px 10px;overflow-x:auto;white-space:pre-wrap;word-break:break-word;
+}
+.blk pre .k{color:var(--t3)}
+.tc-note{font-size:11.5px;color:var(--warn);padding:6px 10px;background:#fbbf240c;border:1px solid #fbbf2424;border-radius:var(--r-sm)}
+/* 运行中：呼吸辉光 + 自动展开（§7.4 活着感） */
+.tc.live{border-color:#6ee7ff38;animation:breathe 2s var(--ease) infinite}
+@keyframes breathe{
+  50%{border-color:#6ee7ff5e;box-shadow:0 0 0 3px #6ee7ff12,var(--sh-card)}
+}
+.tc .result-tail{color:var(--t3)}
+
+/* artifact chip（流内联，点击 → sheet 产物 tab） */
+.achip{
+  display:inline-flex;align-items:center;gap:6px;
+  font-family:var(--f-mono);font-size:11px;letter-spacing:.02em;color:var(--accent);
+  border:1px solid #6ee7ff38;background:#6ee7ff0a;border-radius:var(--r-sm);
+  padding:2.5px 9px;margin-top:6px;transition:all var(--d-fast) var(--ease);
+}
+.achip:hover{background:#6ee7ff18;border-color:#6ee7ff66}
+.achip .a-ic{font-size:10px;opacity:.8}
+.artline{margin-top:2px}
+
+/* 细分隔标记：spawn / checkpoint / file_edit / reply */
+.mk{
+  display:flex;align-items:center;gap:10px;
+  font-family:var(--f-mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;
+  color:var(--t3);padding:2px 0;
+}
+.mk::before,.mk::after{content:"";flex:1;height:1px;background:var(--line)}
+.mk .mk-ic{font-size:10px}
+.mk.spawn .mk-ic{color:var(--info)} .mk.checkpoint .mk-ic{color:var(--accent)}
+.mk.file_edit .mk-ic{color:var(--tk-file)} .mk.exit .mk-ic{color:var(--ok)}
+.mk.reply .mk-ic{color:var(--warn)}
+.mk .mk-dim{letter-spacing:.02em;text-transform:none;color:#4b5560}
+
+/* GateCard（§7.3）：warn 常态 / 付款·删除·对外发布 → err 描边 + 明示后果（ADR 0002） */
+.gate{
+  border-radius:var(--r-md);padding:11px 13px;box-shadow:var(--sh-card);
+  background:var(--s2);
+}
+.gate.warn{border:1px solid #fbbf2438;border-left:3px solid var(--warn)}
+.gate.danger{border:1px solid #f8717150;border-left:3px solid var(--err);background:linear-gradient(180deg,#f871710a,var(--s2) 60%)}
+.g-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.g-head .g-ic{flex:none}
+.gate.warn .g-ic{color:var(--warn)} .gate.danger .g-ic{color:var(--err)}
+.g-head .g-t{font-size:13px;font-weight:550}
+.g-head .g-node{font-family:var(--f-mono);font-size:11px;color:var(--t2)}
+.g-head .chip{margin-left:auto}
+.chip.warn{color:var(--warn);border-color:#fbbf2445}
+.g-q{font-size:12.5px;color:var(--t2);margin:7px 0 9px}
+.gate.danger .g-q{color:#e8a3a3}
+.g-pills{display:flex;gap:7px;flex-wrap:wrap;align-items:center}
+.gp{
+  font-size:12px;border:1px solid var(--line-hi);border-radius:var(--r-pill);
+  padding:3px 13px;color:var(--t1);background:var(--s3);
+  transition:all var(--d-fast) var(--ease);
+}
+.gp:hover{border-color:var(--accent);color:var(--accent)}
+.gp.strong{border-color:#fbbf2460;color:var(--warn)}
+.gp.strong:hover{background:#fbbf2414}
+.gp.btn-err{
+  border-color:#f8717166;color:#fff;background:var(--err);font-weight:600;
+  box-shadow:0 0 14px #f8717133;
+}
+.gp.btn-err:hover{background:#ff8585;color:#1a0d0d;border-color:#f87171}
+.g-input{margin-top:8px}
+.g-input input{
+  width:100%;background:var(--bg);border:1px solid var(--line);border-radius:var(--r-sm);
+  padding:5px 10px;font-size:12px;color:var(--t1);font-family:var(--f-mono);outline:none;
+  transition:border-color var(--d-fast) var(--ease);
+}
+.g-input input:focus{border-color:#fbbf2455}
+.gate.resolved{opacity:.5}
+.gate.resolved .g-pills,.gate.resolved .g-input{display:none}
+.gate .g-done{
+  display:none;font-family:var(--f-mono);font-size:10.5px;color:var(--t3);
+  margin-top:7px;letter-spacing:.05em;
+}
+.gate.resolved .g-done{display:block}
+
+/* skeleton — 105° 斜向扫光 2s（Claude 吸收） */
+.skel{
+  background:var(--s2);border:1px solid var(--line);border-left:3px solid var(--tk-misc);
+  border-radius:var(--r-md);padding:9px 12px;position:relative;overflow:hidden;
+}
+.skel::after{
+  content:"";position:absolute;inset:0;
+  background:linear-gradient(105deg,transparent 30%,#ffffff09 46%,#ffffff14 50%,#ffffff09 54%,transparent 70%);
+  background-size:250% 100%;
+  animation:sweep 2s linear infinite;
+}
+@keyframes sweep{from{background-position:130% 0}to{background-position:-130% 0}}
+.skel-bar{height:9px;border-radius:5px;background:#ffffff0d;margin:6px 0}
+.skel-bar.w40{width:40%}.skel-bar.w70{width:70%}
+
+/* JumpBtn — 离底 >90px 浮出，过弹簧 pop-in（§7.3/7.6） */
+#jump{
+  position:absolute;right:22px;bottom:18px;z-index:5;
+  font-family:var(--f-mono);font-size:11px;letter-spacing:.05em;color:var(--accent);
+  background:var(--overlay);border:1px solid #6ee7ff45;border-radius:var(--r-pill);
+  padding:5px 14px;box-shadow:var(--sh-pop);backdrop-filter:blur(8px);
+  transform:translateY(10px) scale(.9);opacity:0;pointer-events:none;
+  transition:transform var(--d-med) var(--spring),opacity var(--d-fast) var(--ease);
+}
+#jump.show{transform:none;opacity:1;pointer-events:auto}
+#jump:hover{background:#6ee7ff14}
+
+/* Composer（§7.3）：悬浮圆角卡 + 拨盘组（Codex）+ focus-within accent 辉光 */
+#composer-zone{
+  flex:none;padding:10px 22px 16px;display:flex;justify-content:center;
+  background:linear-gradient(0deg,var(--bg) 62%,transparent);
+}
+#composer-card{
+  width:100%;max-width:720px;background:var(--s3);
+  border:1px solid var(--line-hi);border-radius:var(--r-lg);
+  box-shadow:var(--sh-pop);
+  transition:border-color var(--d-med) var(--ease),box-shadow var(--d-med) var(--ease);
+}
+#composer-card:focus-within{border-color:#6ee7ff5e;box-shadow:0 0 0 3px #6ee7ff14,var(--sh-pop)}
+#composer-card textarea{
+  width:100%;background:none;border:none;outline:none;resize:none;
+  color:var(--t1);font:13.5px/1.6 var(--f-prose);
+  padding:12px 15px 4px;min-height:26px;max-height:130px;
+}
+#composer-card textarea::placeholder{color:var(--t3)}
+.cmp-row{display:flex;align-items:center;gap:7px;padding:6px 10px 9px}
+.dials{display:flex;gap:6px;flex-wrap:wrap}
+.dial-wrap{position:relative}
+.dial{
+  font-family:var(--f-mono);font-size:10.5px;letter-spacing:.04em;color:var(--t2);
+  border:1px solid var(--line);border-radius:var(--r-pill);padding:2.5px 10px;
+  display:inline-flex;align-items:center;gap:5px;background:var(--s2);
+  transition:all var(--d-fast) var(--ease);white-space:nowrap;
+}
+.dial:hover{border-color:var(--line-hi);color:var(--t1)}
+.dial .d-caret{font-size:8px;color:var(--t3)}
+.dial-wrap.open .dial{border-color:#6ee7ff50;color:var(--accent)}
+.dial-pop{
+  position:absolute;bottom:calc(100% + 7px);left:0;min-width:150px;z-index:9;
+  background:var(--overlay);border:1px solid var(--line-hi);border-radius:var(--r-md);
+  box-shadow:var(--sh-pop);padding:4px;backdrop-filter:blur(10px);
+  opacity:0;transform:translateY(5px);pointer-events:none;
+  transition:all var(--d-fast) var(--ease);
+}
+.dial-wrap.open .dial-pop{opacity:1;transform:none;pointer-events:auto}
+.dial-opt{
+  display:flex;align-items:center;gap:8px;width:100%;text-align:left;
+  font-family:var(--f-mono);font-size:11px;color:var(--t2);
+  padding:5px 9px;border-radius:var(--r-sm);transition:all var(--d-fast) var(--ease);
+}
+.dial-opt:hover{background:#ffffff08;color:var(--t1)}
+.dial-opt.cur{color:var(--accent)}
+.dial-opt .tick{margin-left:auto;font-size:10px;color:var(--accent);visibility:hidden}
+.dial-opt.cur .tick{visibility:visible}
+.dial-sep{height:1px;background:var(--line);margin:3px 5px}
+#send{
+  margin-left:auto;width:30px;height:30px;border-radius:50%;flex:none;
+  background:var(--accent);color:#0a1216;font-size:14px;font-weight:700;
+  display:flex;align-items:center;justify-content:center;
+  box-shadow:0 0 16px #6ee7ff30;
+  transition:all var(--d-fast) var(--ease);
+}
+#send:hover{transform:translateY(-1px);box-shadow:0 0 22px #6ee7ff50}
+#send:disabled{opacity:.55;cursor:default;animation:sendp 1s var(--ease) infinite;transform:none}
+@keyframes sendp{50%{box-shadow:0 0 0 5px #6ee7ff1e}}
+.cmp-hint{
+  font-family:var(--f-mono);font-size:9.5px;color:var(--t3);letter-spacing:.08em;
+  margin-left:4px;white-space:nowrap;
+}
+
+/* ---------------- 右 DetailSheet：PanelChrome tab 头（Cindy）---------------- */
+#sheet{
+  background:var(--s1);border-left:1px solid var(--line);
+  overflow:hidden;min-width:0;display:flex;
+}
+.sheet-in{
+  width:400px;display:flex;flex-direction:column;min-height:0;flex:none;
+}
+.sheet-tabs{
+  flex:none;display:flex;align-items:center;gap:0;
+  border-bottom:1px solid var(--line);padding:0 8px;height:38px;
+}
+.stab{
+  font-family:var(--f-mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;
+  color:var(--t3);padding:9px 11px;position:relative;transition:color var(--d-fast) var(--ease);
+}
+.stab:hover{color:var(--t2)}
+.stab.on{color:var(--accent)}
+.stab.on::after{
+  content:"";position:absolute;left:8px;right:8px;bottom:-1px;height:2px;
+  background:var(--accent);border-radius:2px;
+}
+#sheet-x{
+  margin-left:auto;width:24px;height:24px;border-radius:var(--r-sm);color:var(--t3);
+  font-size:13px;transition:all var(--d-fast) var(--ease);flex:none;
+}
+#sheet-x:hover{color:var(--t1);background:var(--s2)}
+.sheet-body{flex:1;overflow-y:auto;min-height:0}
+.pane{display:none;padding:14px 16px 30px}
+.pane.on{display:block;animation:enter var(--d-med) var(--ease)}
+/* 产物 tab：文件名头 + copy + 预渲染 markdown */
+.art-head{
+  display:flex;align-items:center;gap:8px;margin-bottom:12px;
+  padding-bottom:10px;border-bottom:1px solid var(--line);
+}
+.art-name{font-family:var(--f-mono);font-size:12px;color:var(--t1);letter-spacing:.02em}
+.art-size{font-family:var(--f-mono);font-size:10px;color:var(--t3)}
+#copy-btn{
+  margin-left:auto;font-family:var(--f-mono);font-size:10px;letter-spacing:.06em;
+  color:var(--t2);border:1px solid var(--line);border-radius:var(--r-sm);
+  padding:2.5px 10px;transition:all var(--d-fast) var(--ease);
+}
+#copy-btn:hover{color:var(--accent);border-color:#6ee7ff45}
+#copy-btn.done{color:var(--ok);border-color:#4ade8045}
+/* 预渲染 markdown 样式 */
+.md h2{font-size:16px;font-weight:600;margin:14px 0 8px;color:var(--t1)}
+.md h3{font-size:13.5px;font-weight:600;margin:16px 0 6px;color:var(--t1)}
+.md p{margin-bottom:10px;color:var(--t2);font-size:13px}
+.md table{width:100%;border-collapse:collapse;margin:10px 0 14px;font-size:12px}
+.md th,.md td{border:1px solid var(--line-hi);padding:5px 9px;text-align:left}
+.md th{background:var(--s2);font-family:var(--f-mono);font-size:10.5px;letter-spacing:.06em;color:var(--t2);font-weight:600}
+.md td{color:var(--t2)}
+.md td.mono-c,.md .mono-c{font-family:var(--f-mono);font-size:11px;color:var(--t1)}
+.md pre{
+  background:var(--bg);border:1px solid var(--line);border-radius:var(--r-sm);
+  padding:10px 12px;overflow-x:auto;margin:8px 0 12px;
+}
+.md pre code{font-family:var(--f-mono);font-size:11.5px;line-height:1.65;color:var(--t2)}
+.md code.ic{font-family:var(--f-mono);font-size:11px;background:var(--s3);border:1px solid var(--line);border-radius:4px;padding:1px 5px;color:var(--accent)}
+.md ul{padding-left:18px;margin-bottom:10px;color:var(--t2);font-size:13px}
+.md li{margin-bottom:3px}
+/* 详情/spec/result 面板 */
+.kv{display:grid;grid-template-columns:88px 1fr;gap:5px 12px;font-size:12px;margin-bottom:14px}
+.kv dt{font-family:var(--f-mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--t3);padding-top:2px}
+.kv dd{color:var(--t2);min-width:0;word-break:break-word}
+.kv dd.mono-v{font-family:var(--f-mono);font-size:11.5px;color:var(--t1)}
+.pane pre.json{
+  font-family:var(--f-mono);font-size:11px;line-height:1.65;color:var(--t2);
+  background:var(--bg);border:1px solid var(--line);border-radius:var(--r-sm);
+  padding:10px 12px;overflow-x:auto;
+}
+.pane pre.json .k{color:#7aa2f7}.pane pre.json .s{color:#9ece6a}.pane pre.json .n{color:#e0a35c}
+.pane textarea{
+  width:100%;background:var(--bg);border:1px solid var(--line);border-radius:var(--r-sm);
+  color:var(--t1);font:12px/1.6 var(--f-mono);padding:8px 10px;resize:vertical;min-height:74px;outline:none;
+}
+.pane textarea:focus{border-color:#6ee7ff50}
+.pane .btn-row{display:flex;justify-content:flex-end;margin-top:8px}
+.pane .btn{
+  font-size:12px;border:1px solid #6ee7ff45;color:var(--accent);border-radius:var(--r-sm);
+  padding:4px 14px;background:#6ee7ff0c;transition:all var(--d-fast) var(--ease);
+}
+.pane .btn:hover{background:#6ee7ff1c}
+
+/* ---------------- 空态 hero（§7.4）：◈ + 建议片 ---------------- */
+#hero{
+  flex:1;display:none;flex-direction:column;align-items:center;justify-content:center;
+  gap:0;min-height:0;padding:0 30px;
+}
+#app.empty #hero{display:flex}
+#app.empty #run-head,#app.empty #gate-banner,#app.empty #stream-wrap{display:none}
+#app.empty{--sheetw:0px}
+.hero-logo{
+  font-size:44px;color:var(--accent);text-shadow:0 0 34px #6ee7ff44;line-height:1;
+  margin-bottom:14px;animation:heroin 600ms var(--spring) both;
+}
+@keyframes heroin{from{opacity:0;transform:scale(.7)}to{opacity:1;transform:none}}
+.hero-t{font-size:20px;font-weight:600;letter-spacing:.06em;margin-bottom:8px}
+.hero-sub{font-size:12.5px;color:var(--t3);margin-bottom:24px}
+.hero-chips{display:flex;gap:9px;flex-wrap:wrap;justify-content:center;max-width:560px}
+.hchip{
+  font-size:12.5px;color:var(--t2);border:1px solid var(--line-hi);
+  border-radius:var(--r-pill);padding:6px 16px;background:var(--s2);
+  transition:all var(--d-fast) var(--ease);
+}
+.hchip:hover{color:var(--accent);border-color:#6ee7ff50;background:#6ee7ff0c;transform:translateY(-1px)}
+
+/* 开发开关（tiny） */
+#dev{
+  position:fixed;right:10px;bottom:5px;z-index:50;
+  font-family:var(--f-mono);font-size:9.5px;color:#3c4550;letter-spacing:.06em;
+}
+#dev:hover{color:var(--t3)}
+</style>
+</head>
+<body>
+
+<div id="app">
+  <!-- ================= 左轨 ================= -->
+  <aside id="rail">
+    <div class="rail-head">
+      <span class="brand-glyph">◈</span><span class="brand-t">AICA · 工作台</span>
+    </div>
+    <div class="rail-scroll">
+      <div class="g-label">活跃</div>
+
+      <div class="rc run sel" data-run="weixin" title="桌面版微信截图与窗口结构总结">
+        <div class="rc-subject">桌面版微信截图与窗口结构总结</div>
+        <div class="rc-meta"><i class="dot run"></i><span>3 节点 · <b class="mono" data-tick="432">7m12s</b></span></div>
+        <div class="rc-last">agent_desktop — snapshot done</div>
+      </div>
+
+      <div class="rc wait" data-run="report" title="每周博文素材整理">
+        <div class="rc-subject">每周博文素材整理与摘要</div>
+        <div class="rc-meta"><i class="dot warn"></i><span>2 节点 · 等待回复</span></div>
+        <div class="rc-last">kn_recall — 缓存命中 4 条</div>
+        <span class="noti">1</span>
+      </div>
+
+      <div class="rc done" data-run="done2" title="夜间任务：D 盘备份清单">
+        <div class="rc-subject">夜间任务：D 盘备份清单核对</div>
+        <div class="rc-meta"><i class="dot ok"></i><span>1 节点 · 已完成 12m</span></div>
+        <div class="rc-last">ev_done — exit 0 · 产物 2 件</div>
+      </div>
+
+      <div class="g-label" style="margin-top:10px">已沉降</div>
+      <div class="rs"><i class="dot ok"></i><span class="rs-t">书库索引重建（calibre → kn）</span><span class="rs-time">42m</span></div>
+      <div class="rs"><i class="dot ok"></i><span class="rs-t">ax6000 固件抓取与 diff</span><span class="rs-time">3h</span></div>
+      <div class="rs"><i class="dot err"></i><span class="rs-t">ego(lite) 会话归档 · kn 失败</span><span class="rs-time">5h</span></div>
+      <div class="rs"><i class="dot ok"></i><span class="rs-t">周报模板刷新 + 摘要草稿</span><span class="rs-time">昨</span></div>
+      <div class="rs"><i class="dot ok"></i><span class="rs-t">D:\aica\inbox 清理建议</span><span class="rs-time">昨</span></div>
+      <div class="rs"><i class="dot idle"></i><span class="rs-t">workbench UI 规范走查</span><span class="rs-time">2d</span></div>
+    </div>
+    <div class="rail-sys">
+      <span class="sys-chip"><i class="dot ok"></i>server</span>
+      <span class="sys-chip">daemon pid 15172</span>
+      <button id="rail-toggle" title="折叠侧栏">«</button>
+    </div>
+  </aside>
+
+  <!-- ================= 中央 ================= -->
+  <main id="main">
+    <header id="run-head">
+      <div class="rh-top">
+        <div class="rh-subject" id="rh-subject"></div>
+        <span class="agg run" id="rh-agg">运行中</span>
+      </div>
+      <div class="rh-row2">
+        <span id="rh-pills" style="display:flex;gap:6px;flex-wrap:wrap"></span>
+        <span class="rh-stats" id="rh-stats"></span>
+      </div>
+    </header>
+
+    <div id="gate-banner">
+      <span>◆</span><span>1 个节点等待回复</span><span class="gb-node">— root/review</span>
+      <button id="gb-locate">定位</button>
+    </div>
+
+    <div id="stream-wrap">
+      <div class="s-fade top"></div>
+      <div id="stream"></div>
+      <div class="s-fade bot"></div>
+      <button id="jump">↓ 最新</button>
+    </div>
+
+    <div id="hero">
+      <div class="hero-logo">◈</div>
+      <div class="hero-t">AICA 工作台</div>
+      <div class="hero-sub">派发任务 · 查看过程 · 随时接管</div>
+      <div class="hero-chips">
+        <button class="hchip">截图当前窗口并总结结构</button>
+        <button class="hchip">整理 D:\aica\inbox 里的文件</button>
+        <button class="hchip">回顾本周 agent 运行记录</button>
+      </div>
+    </div>
+
+    <div id="composer-zone">
+      <div id="composer-card">
+        <textarea id="cmp-ta" rows="1" placeholder="派发一个新任务…   ( / 聚焦 · Enter 发送 · Shift+Enter 换行 )"></textarea>
+        <div class="cmp-row">
+          <div class="dials" id="dials"></div>
+          <span class="cmp-hint">task</span>
+          <button id="send" title="派发 (Enter)">↑</button>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <!-- ================= 右 DetailSheet ================= -->
+  <aside id="sheet">
+    <div class="sheet-in">
+      <div class="sheet-tabs" id="sheet-tabs">
+        <button class="stab" data-tab="info">详情</button>
+        <button class="stab on" data-tab="art">产物</button>
+        <button class="stab" data-tab="spec">spec</button>
+        <button class="stab" data-tab="result">result</button>
+        <button class="stab" data-tab="reply">回复</button>
+        <button id="sheet-x" title="关闭 (Esc)">✕</button>
+      </div>
+      <div class="sheet-body">
+
+        <div class="pane" data-pane="info">
+          <dl class="kv">
+            <dt>节点</dt><dd class="mono-v">root/review</dd>
+            <dt>agent</dt><dd class="mono-v">task · deepseek-v4.1-flash</dd>
+            <dt>状态</dt><dd><span class="chip warn">等待回复</span></dd>
+            <dt>目标</dt><dd>汇总抓取结果，产出窗口结构文档并等待人审。</dd>
+            <dt>耗时</dt><dd class="mono-v">2m41s · 4.2k tok</dd>
+            <dt>产物</dt><dd class="mono-v" style="color:var(--accent)">artifacts/weixin-ui.md</dd>
+          </dl>
+          <div class="blk-label">父节点</div>
+          <pre class="json">root — 桌面版微信截图与窗口结构总结</pre>
+        </div>
+
+        <div class="pane on" data-pane="art">
+          <div class="art-head">
+            <span class="art-name">📄 weixin-ui.md</span>
+            <span class="art-size">3.2 KB · artifacts/</span>
+            <button id="copy-btn">copy</button>
+          </div>
+          <div class="md" id="art-md">
+            <h2>桌面版微信 — 窗口结构摘要</h2>
+            <p>来源 <code class="ic">artifacts/ad-snapshot.txt</code>（agent_desktop · UIA 树，2,114 个元素）。以下为截取时刻的顶层结构与关键控件。</p>
+            <h3>顶层结构</h3>
+            <table>
+              <tr><th>层级</th><th>控件</th><th>名称</th><th>备注</th></tr>
+              <tr><td class="mono-c">0</td><td class="mono-c">Window</td><td class="mono-c">微信</td><td>主窗口 1080×720</td></tr>
+              <tr><td class="mono-c">1</td><td class="mono-c">Pane</td><td class="mono-c">导航栏</td><td>会话 / 通讯录 / 收藏</td></tr>
+              <tr><td class="mono-c">1</td><td class="mono-c">List</td><td class="mono-c">会话列表</td><td>23 项，虚拟化</td></tr>
+              <tr><td class="mono-c">1</td><td class="mono-c">Pane</td><td class="mono-c">聊天区</td><td>含输入框 + 工具条</td></tr>
+            </table>
+            <h3>关键控件路径</h3>
+            <pre><code>Window[微信]
+ └─ Pane[聊天区]
+     ├─ Edit[输入框]        automationid=chat_input
+     ├─ Button[发送(S)]     automationid=send_btn
+     └─ ToolBar[表情/文件/截图]</code></pre>
+            <h3>观察</h3>
+            <ul>
+              <li>UIA 树完整暴露输入框与发送按钮，可走 <code class="ic">agent_desktop</code> 自动化。</li>
+              <li>会话列表为虚拟滚动，抓全量需滚动枚举（~4 屏）。</li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="pane" data-pane="spec">
+          <div class="blk-label">root/review · spec.json</div>
+          <pre class="json">{
+  <span class="k">"node"</span>: <span class="s">"root/review"</span>,
+  <span class="k">"agent"</span>: <span class="s">"task"</span>,
+  <span class="k">"model"</span>: <span class="s">"deepseek-v4.1-flash"</span>,
+  <span class="k">"goal"</span>: <span class="s">"汇总抓取结果，产出结构文档"</span>,
+  <span class="k">"gate"</span>: { <span class="k">"kind"</span>: <span class="s">"review"</span>, <span class="k">"since"</span>: <span class="n">"04:58:12"</span> },
+  <span class="k">"reply"</span>: <span class="n">null</span>
+}</pre>
+        </div>
+
+        <div class="pane" data-pane="result">
+          <div class="blk-label">root/review · result（节选）</div>
+          <pre class="json">{
+  <span class="k">"artifacts"</span>: [<span class="s">"weixin-ui.md"</span>, <span class="s">"ad-snapshot.txt"</span>],
+  <span class="k">"summary"</span>: <span class="s">"结构文档已产出，待人审确认拆分粒度。"</span>,
+  <span class="k">"spent"</span>: { <span class="k">"tok"</span>: <span class="n">4210</span>, <span class="k">"ms"</span>: <span class="n">161300</span> }
+}</pre>
+        </div>
+
+        <div class="pane" data-pane="reply">
+          <div class="blk-label">回复 root/review（ar reply）</div>
+          <textarea id="reply-ta" placeholder="输入回复内容…"></textarea>
+          <div class="btn-row"><button class="btn" id="reply-send">发送回复</button></div>
+        </div>
+
+      </div>
+    </div>
+  </aside>
+</div>
+
+<a id="dev" href="#" title="dev toggle">empty?</a>
+
+<script>
+/* ================================================================
+   AICA 工作台原型 — 全 mock。真实实现见 ../public/（server.ts 桥接）
+   ================================================================ */
+"use strict";
+const $=(s,r=document)=>r.querySelector(s), $$=(s,r=document)=>[...r.querySelectorAll(s)];
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const T0=Date.now();
+
+/* ---------------- 工具 kind → 图标/色类（与 ../public/cards.js 同一套） ---------------- */
+const KIND={
+  file:{i:"⬒",cls:"tk-file"},bash:{i:"$",cls:"tk-bash"},powershell:{i:"❯",cls:"tk-ps"},
+  desktop:{i:"▣",cls:"tk-desktop"},browser:{i:"◉",cls:"tk-browser"},kn:{i:"◈",cls:"tk-kn"},
+  ar:{i:"◇",cls:"tk-ar"},ev:{i:"⚑",cls:"tk-ev"},tool:{i:"⚙",cls:"tk-misc"},
+};
+
+/* ---------------- 渲染单元 ---------------- */
+const R={
+  user:d=>`<div class="item umsg enter"><div class="u"><span class="who">you · ${esc(d.node||"root")}</span>${esc(d.text)}</div></div>`,
+  assistant:d=>`<div class="item amsg enter">${d.paras.map(p=>`<p>${p}</p>`).join("")}</div>`,
+  frag:d=>`<div class="item amsg enter"><p class="frag">${esc(d.text)}<span class="cursor">▍</span></p></div>`,
+  marker:d=>`<div class="item mk ${esc(d.k)} enter"><span class="mk-ic">${d.ic}</span><span>${esc(d.k)}</span><span class="mk-dim">${esc(d.d)}</span></div>`,
+  artline:d=>`<div class="item artline enter"><button class="achip" data-art="${esc(d.f)}"><span class="a-ic">✎</span>${esc(d.f)}<span style="color:var(--t3)">· ${esc(d.meta||"")}</span></button></div>`,
+  skeleton:()=>`<div class="item enter"><div class="skel"><div class="skel-bar w40"></div><div class="skel-bar w70"></div></div></div>`,
+  gate:d=>`<div class="item enter"><div class="gate ${d.tier}" data-node="${esc(d.node)}">
+      <div class="g-head"><span class="g-ic">${d.tier==="danger"?"⚠":"◆"}</span>
+        <span class="g-t">${esc(d.title)}</span>
+        ${d.node?`<span class="g-node">${esc(d.node)}</span>`:""}
+        <span class="chip ${d.tier==="danger"?"err":"warn"}">${esc(d.chip)}</span></div>
+      <div class="g-q">${d.q}</div>
+      <div class="g-pills">${d.pills.map(p=>`<button class="gp ${p.cls||""}" data-g="${esc(d.node)}" data-r="${esc(p.t)}">${esc(p.t)}</button>`).join("")}</div>
+      ${d.input?`<div class="g-input"><input placeholder="输入回复…（ar reply --node ${esc(d.node)}）"></div>`:""}
+      <div class="g-done">✓ 已通过 ar reply 回复 — 本卡已归档（mock）</div>
+    </div></div>`,
+  tool:d=>{
+    const k=KIND[d.kind]||KIND.tool;
+    const cls=["tc",k.cls,d.open?"open":"",d.live?"live open":"",d.err?"err":""].join(" ");
+    const chip=d.live?`<span class="chip run">running</span>`:d.err?`<span class="chip err">error</span>`:`<span class="chip ok">ok</span>`;
+    const dur=d.live?`<span class="tdur live" data-tick="${d.elapsed||0}">${fmtTick(d.elapsed||0)}</span>`:`<span class="tdur">${esc(d.dur)}</span>`;
+    let body="";
+    if(d.args)body+=`<div class="blk"><div class="blk-label">args</div><pre>${d.args}</pre></div>`;
+    if(d.result)body+=`<div class="blk"><div class="blk-label">result</div><pre>${d.result}</pre></div>`;
+    if(d.note)body+=`<div class="tc-note">${d.note}</div>`;
+    if(d.arts)body+=d.arts.map(a=>`<button class="achip" data-art="${esc(a)}"><span class="a-ic">📄</span>${esc(a)}</button>`).join(" ");
+    return `<div class="item enter"><div class="${cls}" data-node="${esc(d.node||"root")}">
+      <div class="tc-head">
+        <span class="tico">${k.i}</span><span class="tname">${esc(d.name)}</span>
+        <span class="tprev">${esc(d.prev||"")}</span>${dur}${chip}
+        <button class="tsheet" title="在详情层打开">⇗</button>
+        <span class="tchev">▾</span>
+      </div>
+      ${body?`<div class="tc-body">${body}</div>`:""}
+    </div></div>`;
+  },
+};
+function fmtTick(s){s=Math.floor(s);const m=Math.floor(s/60);return m?`${m}m${String(s%60).padStart(2,"0")}s`:`${s}s`}
+
+/* ---------------- Mock 数据集：2 个 run ---------------- */
+const RUNS={
+weixin:{
+  subject:"桌面版微信截图与窗口结构总结",
+  agg:{t:"运行中",cls:"run"},
+  nodes:["root","root/fetch","root/review"],
+  stats:`Σ <b>47</b> events · <b>12.4k</b> tok · <b data-tick="432">7m12s</b>`,
+  banner:true,
+  items:[
+    {t:"user",node:"root",text:"把桌面版微信截个图，总结窗口结构写到 artifacts/weixin-ui.md"},
+    {t:"marker",k:"spawn",ic:"✚",d:"root · agent=task · model=deepseek-v4.1-flash"},
+    {t:"tool",node:"root/fetch",kind:"desktop",name:"agent_desktop",open:true,prev:"snapshot window=WeChat",dur:"1.8s",
+     args:`{\n  "action": "snapshot",\n  "window": "微信",\n  "depth": 6,\n  "out": "artifacts/ad-snapshot.txt"\n}`,
+     result:`UIA tree captured — 2,114 elements\nwindow 1080×720 · foreground · dpi 96\nwrote artifacts/ad-snapshot.txt (86 KB)`,
+     arts:["artifacts/ad-snapshot.txt"]},
+    {t:"assistant",node:"root",paras:[
+      "快照拿到了，UIA 树是完整的——主窗口、左侧导航、会话列表、聊天区四个顶层区块都能定位到。值得注意的一点：会话列表是虚拟滚动容器，静态快照只能看到当前视口内的 23 项，如果要全量会话名需要滚动枚举，这次任务只要求窗口结构，先不展开。",
+      "接下来我把结构整理成 markdown 写入 artifacts/weixin-ui.md：先列顶层控件表，再给出输入框和发送按钮的 UIA 路径——这两个是以后做桌面自动化的锚点，值得单独标出来。"]},
+    {t:"tool",node:"root",kind:"file",name:"write",prev:"artifacts/weixin-ui.md · 3.2 KB",dur:"0.3s"},
+    {t:"marker",k:"file_edit",ic:"✎",d:"artifacts/weixin-ui.md · +54 −0"},
+    {t:"artline",f:"artifacts/weixin-ui.md",meta:"3.2 KB · 刚写入"},
+    {t:"tool",node:"root/fetch",kind:"powershell",name:"powershell",live:true,elapsed:12,prev:"Get-Process WeChat | … UIA 重新枚举校验",
+     args:`{\n  "cmd": "Get-Process WeChat | Select-Object Id,MainWindowTitle,\\n    @{n='Children';e={(Get-UIAChildren $_.MainWindowHandle).Count}}"}`,
+     result:`（running — stdout 流式追加）\nId      MainWindowTitle  Children\n--      ---------------  --------\n21540   微信             …enumerating`},
+    {t:"assistant",node:"root/review",paras:[
+      "文档已落盘。交叉校验这步在用 PowerShell 重枚举一遍窗口子控件数，跟快照里的计数对上才算完——避免抓到的是窗口重绘中间态。校验过了我再请你确认一件事：摘要要不要按窗口拆成多个文件。"]},
+    {t:"marker",k:"checkpoint",ic:"◈",d:"root/fetch · snapshot 校验进行中"},
+    {t:"tool",node:"root/fetch",kind:"kn",name:"kn_recall",err:true,prev:"窗口结构 · 历史摘要",dur:"0.1s",
+     args:`{\n  "q": "wechat 窗口结构 历史快照",\n  "k": 5\n}`,
+     result:`kn daemon unreachable (localhost:7821)\nECONNREFUSED after 120ms`,
+     note:"知识库不可用（kn daemon 未启动）— 已回退本地缓存检索，结果可能不完整。"},
+    {t:"tool",node:"root/fetch",kind:"bash",name:"bash",prev:"wc -l artifacts/*.txt | tail -3",dur:"0.4s"},
+    {t:"gate",node:"root/review",tier:"warn",chip:"review",title:"节点等待回复",
+     q:"窗口结构摘要合并为单个 weixin-ui.md，还是按窗口拆成多个文件？当前单文档 3.2 KB，拆分便于后续增量更新。",
+     pills:[{t:"批准",cls:"strong"},{t:"拒绝"},{t:"补充说明"}],input:true},
+    {t:"gate",node:"root/cleanup",tier:"danger",chip:"delete",title:"即将执行：删除 D:\\aica\\tmp\\ 下 12 个文件",
+     q:"该操作不可撤销。删除类操作需明示批准（ADR 0002 三确认点），按钮文案即后果。",
+     pills:[{t:"确认：永久删除",cls:"btn-err"},{t:"取消"}]},
+    {t:"frag",node:"root",text:"收到。等校验结果和你的回复，我先把 diff 摘要挂上——"},
+    {t:"skeleton"},
+  ],
+},
+report:{
+  subject:"每周博文素材整理与摘要",
+  agg:{t:"等待回复",cls:"warn"},
+  nodes:["root","root/collect"],
+  stats:`Σ <b>21</b> events · <b>6.1k</b> tok · 3m40s`,
+  banner:false,
+  items:[
+    {t:"user",node:"root",text:"把这周收藏的博文按主题归类，挑 5 篇写一句话摘要"},
+    {t:"marker",k:"spawn",ic:"✚",d:"root · agent=task · model=deepseek-v4.1-flash"},
+    {t:"tool",node:"root/collect",kind:"kn",name:"kn_recall",open:true,prev:"bookmarks · week=44",dur:"0.6s",
+     args:`{\n  "q": "bookmarks week 44",\n  "kind": "bookmark",\n  "k": 30\n}`,
+     result:`cache hit · 23 entries\nsource: %LOCALAPPDATA%\\aica\\data\\kn-cache`},
+    {t:"assistant",node:"root",paras:[
+      "缓存里捞出 23 条本周收藏，按标签粗分下来是：agent 工程 9 篇、渲染管线 6 篇、杂项 8 篇。我打算从 agent 工程里挑 3 篇、渲染管线挑 2 篇写摘要，比例跟你的阅读分布一致。"]},
+    {t:"tool",node:"root/collect",kind:"browser",name:"webfetch",prev:"reread · 5 urls",dur:"4.2s"},
+    {t:"marker",k:"checkpoint",ic:"◈",d:"root/collect · 5/5 摘要完成"},
+    {t:"gate",node:"root",tier:"warn",chip:"review",title:"节点等待回复",
+     q:"5 篇摘要已生成（agent 工程 3 + 渲染管线 2）。确认入选清单，还是替换某一篇？",
+     pills:[{t:"批准",cls:"strong"},{t:"换一篇"},{t:"补充说明"}],input:true},
+    {t:"frag",node:"root",text:"摘要草稿在 artifacts/week44-picks.md，确认后即归档——"},
+  ],
+},
+};
+
+/* ---------------- 拨盘组（Codex 四拨盘，mock popover） ---------------- */
+const DIALS=[
+  {label:"任务",opts:["任务","带工具 tools 授权","编排 orchestrator"]},
+  {label:"权限: 标准",opts:["权限: 只读","权限: 标准","权限: 完全"]},
+  {label:"deepseek-v4.1-flash",opts:["deepseek-v4.1-flash","deepseek-v4.1-pro","local qwen3-32b"]},
+  {label:"effort: 中",opts:["effort: 低","effort: 中","effort: 高"]},
+];
+$("#dials").innerHTML=DIALS.map((d,i)=>`
+  <div class="dial-wrap"><button class="dial" data-d="${i}">${esc(d.label)} <span class="d-caret">▾</span></button>
+  <div class="dial-pop">${d.opts.map(o=>`<button class="dial-opt ${o===d.label?"cur":""}" data-d="${i}" data-o="${esc(o)}"><span>${esc(o)}</span><span class="tick">✓</span></button>`).join("")}</div>
+  </div>`).join("");
+
+/* ---------------- 状态 ---------------- */
+const app=$("#app"), stream=$("#stream"), swrap=$("#stream-wrap");
+let curRun="weixin";
+
+function renderRun(id){
+  curRun=id;
+  const r=RUNS[id];
+  $$(".rc").forEach(c=>c.classList.toggle("sel",c.dataset.run===id));
+  $("#rh-subject").textContent=r.subject;
+  const agg=$("#rh-agg"); agg.textContent=r.agg.t; agg.className="agg "+r.agg.cls;
+  $("#rh-pills").innerHTML=["全部",...r.nodes].map((n,i)=>`<button class="npill ${i===0?"on":""}" data-node="${esc(n)}">${esc(n)}</button>`).join("");
+  $("#rh-stats").innerHTML=r.stats;
+  $("#gate-banner").classList.toggle("hide",!r.banner);
+  stream.innerHTML=r.items.map(it=>R[it.t](it)).join("");
+  /* 初始停在偏上位置 → ↓最新 pill 可见（演示态） */
+  requestAnimationFrame(()=>{stream.scrollTop=stream.scrollHeight*0.42;updJump();});
+}
+
+/* ---------------- 交互 ---------------- */
+/* rail 折叠 */
+$("#rail-toggle").addEventListener("click",()=>{
+  app.classList.toggle("min");
+  $("#rail-toggle").textContent=app.classList.contains("min")?"»":"«";
+});
+/* rail 选择 run：前两个活跃卡各有数据集；done 卡与沉降行演示切到第二数据集 */
+$$(".rc").forEach(c=>c.addEventListener("click",()=>{
+  renderRun(c.dataset.run==="weixin"?"weixin":"report");
+}));
+$$(".rs").forEach(r=>r.addEventListener("click",()=>renderRun("report")));
+
+/* 流内委托：tool 展开、⇗、artifact chip、gate pill、node pill 过滤 */
+stream.addEventListener("click",e=>{
+  const chip=e.target.closest(".achip");
+  if(chip){openSheet("art");return}
+  const gp=e.target.closest(".gp");
+  if(gp){
+    const gate=gp.closest(".gate");gate.classList.add("resolved");
+    const node=gp.dataset.g,txt=gp.dataset.r;
+    stream.insertAdjacentHTML("beforeend",
+      R.marker({k:"reply",ic:"➤",d:`ar reply → ${node}：“${txt}”`}));
+    if(node==="root/review")$("#gate-banner").classList.add("hide");
+    stream.lastElementChild.scrollIntoView({behavior:"smooth",block:"end"});
+    return;
+  }
+  const sh=e.target.closest(".tsheet");
+  if(sh){openSheet("info");e.stopPropagation();return}
+  const head=e.target.closest(".tc-head");
+  if(head){head.closest(".tc").classList.toggle("open");return}
+});
+/* node pill 过滤：不匹配的项淡出（mock：dim 而非移除） */
+$("#rh-pills").addEventListener("click",e=>{
+  const p=e.target.closest(".npill");if(!p)return;
+  $$(".npill").forEach(x=>x.classList.toggle("on",x===p));
+  const n=p.dataset.node;
+  $$("#stream .item").forEach(it=>{
+    const holder=it.firstElementChild,hn=holder&&holder.dataset?holder.dataset.node:null;
+    it.classList.toggle("dim",n!=="全部"&&hn&&hn!==n);
+  });
+});
+/* gate 定位 → 滚到第一个未解决 gate */
+$("#gb-locate").addEventListener("click",()=>{
+  const g=$(".gate.warn:not(.resolved)",stream);
+  if(g)g.scrollIntoView({behavior:"smooth",block:"center"});
+});
+
+/* JumpBtn：离底 >90px 浮出 */
+function updJump(){
+  const gap=stream.scrollHeight-stream.scrollTop-stream.clientHeight;
+  $("#jump").classList.toggle("show",gap>90);
+}
+stream.addEventListener("scroll",updJump);
+$("#jump").addEventListener("click",()=>{stream.scrollTop=stream.scrollHeight;updJump();});
+
+/* ---------------- DetailSheet ---------------- */
+function openSheet(tab){
+  app.classList.remove("nosheet");
+  if(tab)switchTab(tab);
+}
+function closeSheet(){app.classList.add("nosheet")}
+function switchTab(name){
+  $$(".stab").forEach(t=>t.classList.toggle("on",t.dataset.tab===name));
+  $$(".pane").forEach(p=>p.classList.toggle("on",p.dataset.pane===name));
+}
+$("#sheet-tabs").addEventListener("click",e=>{
+  const t=e.target.closest(".stab");if(t){switchTab(t.dataset.tab);return}
+  if(e.target.closest("#sheet-x"))closeSheet();
+});
+$("#copy-btn").addEventListener("click",()=>{
+  const b=$("#copy-btn");
+  const txt=$("#art-md").innerText;
+  const done=()=>{b.textContent="copied ✓";b.classList.add("done");setTimeout(()=>{b.textContent="copy";b.classList.remove("done")},1400)};
+  if(navigator.clipboard&&navigator.clipboard.writeText)navigator.clipboard.writeText(txt).then(done,done);else done();
+});
+$("#reply-send").addEventListener("click",()=>{
+  const ta=$("#reply-ta");if(!ta.value.trim()){ta.focus();return}
+  stream.insertAdjacentHTML("beforeend",R.marker({k:"reply",ic:"➤",d:`ar reply → root/review：“${ta.value.trim().slice(0,42)}”`}));
+  ta.value="";closeSheet();stream.lastElementChild.scrollIntoView({behavior:"smooth",block:"end"});
+});
+
+/* ---------------- 拨盘 popover（mock） ---------------- */
+document.addEventListener("click",e=>{
+  const dial=e.target.closest(".dial");
+  const opt=e.target.closest(".dial-opt");
+  if(opt){
+    const w=opt.closest(".dial-wrap"),i=+opt.dataset.d;
+    DIALS[i].label=opt.dataset.o;
+    w.querySelector(".dial").innerHTML=esc(opt.dataset.o)+' <span class="d-caret">▾</span>';
+    $$(".dial-opt",w).forEach(o=>o.classList.toggle("cur",o===opt));
+    w.classList.remove("open");return;
+  }
+  if(dial){
+    const w=dial.closest(".dial-wrap"),was=w.classList.contains("open");
+    $$(".dial-wrap.open").forEach(x=>x.classList.remove("open"));
+    if(!was)w.classList.add("open");return;
+  }
+  if(!e.target.closest(".dial-wrap"))$$(".dial-wrap.open").forEach(x=>x.classList.remove("open"));
+});
+
+/* ---------------- Composer ---------------- */
+const ta=$("#cmp-ta"),send=$("#send");
+function autogrow(){ta.style.height="auto";ta.style.height=Math.min(ta.scrollHeight,130)+"px"}
+ta.addEventListener("input",autogrow);
+ta.addEventListener("keydown",e=>{
+  if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();dispatch()}
+});
+send.addEventListener("click",dispatch);
+function dispatch(){
+  const text=ta.value.trim();
+  if(!text||send.disabled)return;
+  if(app.classList.contains("empty")){           /* 空态下派发 → 填充 weixin 数据集演示 */
+    app.classList.remove("empty");renderRun("weixin");
+  }
+  ta.value="";autogrow();send.disabled=true;
+  stream.insertAdjacentHTML("beforeend",R.user({text,node:"root"})+R.skeleton());
+  stream.scrollTop=stream.scrollHeight;updJump();
+  setTimeout(()=>{
+    const sk=$$(".skel",stream).pop();
+    if(sk)sk.closest(".item").outerHTML=R.tool({
+      node:"root",kind:"ar",name:"ar_dispatch",prev:`profile=task · ${esc(text.slice(0,38))}`,dur:"0.9s",
+    });
+    stream.insertAdjacentHTML("beforeend",R.marker({k:"spawn",ic:"✚",d:"新 run 已入队 — daemon pid 15172 拾取中"}));
+    stream.scrollTop=stream.scrollHeight;updJump();
+    send.disabled=false;
+  },900);
+}
+/* 建议片 → 填入 composer */
+$$(".hchip").forEach(c=>c.addEventListener("click",()=>{ta.value=c.textContent;ta.focus();autogrow()}));
+
+/* ---------------- 键盘（§7.4） ---------------- */
+document.addEventListener("keydown",e=>{
+  if(e.key==="/"&&document.activeElement!==ta&&document.activeElement.tagName!=="INPUT"&&document.activeElement.tagName!=="TEXTAREA"){
+    e.preventDefault();ta.focus();
+  }
+  if(e.key==="Escape"){
+    if($$(".dial-wrap.open").length){$$(".dial-wrap.open").forEach(x=>x.classList.remove("open"));return}
+    closeSheet();
+  }
+});
+
+/* ---------------- 空态 dev 开关 + ?empty ---------------- */
+$("#dev").addEventListener("click",e=>{e.preventDefault();app.classList.toggle("empty");if(app.classList.contains("empty"))ta.focus()});
+if(/[?&]empty\b/.test(location.search)){app.classList.add("empty")}
+
+/* ---------------- elapsed 秒表（running run + live 工具卡） ---------------- */
+setInterval(()=>{
+  $$("[data-tick]").forEach(el=>{
+    const base=+el.dataset.tick;
+    el.textContent=fmtTick(base+(Date.now()-T0)/1000);
+  });
+},1000);
+
+/* ---------------- init ---------------- */
+renderRun("weixin");
+if(app.classList.contains("empty"))ta.focus();
+</script>
+</body>
+</html>

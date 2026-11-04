@@ -1,5 +1,5 @@
 // runs/ 运行目录操作：唯一的运行状态源，全部纯文件
-import { mkdirSync, writeFileSync, readFileSync, existsSync, readdirSync, appendFileSync } from "node:fs";
+import { mkdirSync, writeFileSync, readFileSync, existsSync, readdirSync, appendFileSync, renameSync } from "node:fs";
 import { join } from "node:path";
 import type { SpecEnvelope, ResultEnvelope, EventRecord } from "./envelope.ts";
 import { nodeId, stableId } from "./envelope.ts";
@@ -18,7 +18,7 @@ function runDir(rootId: string): string {
   return join(RUNS_DIR, rootId);
 }
 
-function nodeDir(rootId: string, path: string): string {
+export function nodeDir(rootId: string, path: string): string {
   return join(runDir(rootId), "nodes", path);
 }
 
@@ -82,16 +82,64 @@ export function appendEvent(rootId: string, path: string, rec: Omit<EventRecord,
   appendFileSync(join(nodeDir(rootId, path), "events.jsonl"), line + "\n", "utf8");
 }
 
-/** daemon 消费的视图：有 spec 无 result 的节点 = 待拉起 */
-export function pendingNodes(): { rootId: string; path: string; spec: SpecEnvelope }[] {
+/** ev_gate：节点目录写 gate.json（workbench inbox 投影读它），并记一条 gate 事件（尾事件 hint 即问题） */
+export function writeGate(rootId: string, path: string, gate: { question: string; opts?: string[] }): void {
+  writeJson(join(nodeDir(rootId, path), "gate.json"), { ...gate, ts: new Date().toISOString() });
+  appendEvent(rootId, path, { kind: "gate", data: { question: gate.question } });
+}
+
+/** resume：waiting 的 result.json 归档为 result.resolved.json → 节点回到 pending（reply 时隐式触发） */
+export function resolveWaiting(rootId: string, path: string): boolean {
+  if (readResult(rootId, path)?.status !== "waiting") return false;
+  try {
+    renameSync(join(nodeDir(rootId, path), "result.json"), join(nodeDir(rootId, path), "result.resolved.json"));
+    return true;
+  } catch { return false; }
+}
+
+/** dep 路径归一：depends 可写兄弟 path（"root/a"）或完整节点 id（"node:<root>/root/a"） */
+function depPath(rootId: string, dep: string): string {
+  const prefix = `node:${rootId}/`;
+  return dep.startsWith(prefix) ? dep.slice(prefix.length) : dep;
+}
+
+/** daemon 消费的视图：待拉起节点。resumed = waiting 经人工回复后重新拉起（userMessage 追加恢复行用） */
+export function pendingNodes(): { rootId: string; path: string; spec: SpecEnvelope; resumed?: boolean }[] {
   runsDir();
-  const out: { rootId: string; path: string; spec: SpecEnvelope }[] = [];
+  const out: { rootId: string; path: string; spec: SpecEnvelope; resumed?: boolean }[] = [];
   for (const rootId of readdirSync(RUNS_DIR)) {
     const nodesRoot = join(runDir(rootId), "nodes");
     if (!existsSync(nodesRoot)) continue;
-    for (const path of readdirSync(nodesRoot)) {
+    // 递归收集节点 path（nodes/root/a 这种嵌套子节点；对齐 server.ts nodePaths 的走法）
+    const paths: string[] = [];
+    const walk = (dir: string, rel: string, depth: number): void => {
+      if (depth > 6) return;
+      for (const ent of readdirSync(dir, { withFileTypes: true })) {
+        if (!ent.isDirectory() || ent.name === "artifacts") continue;
+        const childRel = rel ? `${rel}/${ent.name}` : ent.name;
+        paths.push(childRel);
+        walk(join(dir, ent.name), childRel, depth + 1);
+      }
+    };
+    walk(nodesRoot, "", 0);
+    for (const path of paths) {
       const spec = readSpec(rootId, path);
-      if (spec && !readResult(rootId, path)) out.push({ rootId, path, spec });
+      if (!spec) continue;
+      const r = readResult(rootId, path);
+      let resumed = false;
+      if (r) {
+        if (r.status === "waiting") {
+          // 最后一条人工回复晚于提问落盘时间 → 归档 result，视为重新 pending（绕过 reply 的直写也生效）
+          const last = spec.reply?.at(-1);
+          if (last && last.ts > r.finished_at && resolveWaiting(rootId, path)) resumed = true;
+          else continue;   // 未回复的 waiting 挂着不动
+        } else continue;   // blocked / done / failed 等不再拉起
+      } else if (existsSync(join(nodeDir(rootId, path), "result.resolved.json"))) {
+        resumed = true;    // reply 已归档过 result，本次是恢复后的拉起
+      }
+      // 依赖闸门：spec.depends 列出的兄弟 path 全部 done 才拉起（dep 完成后下一轮自然满足）
+      if (spec.depends?.length && spec.depends.some((d) => readResult(rootId, depPath(rootId, d))?.status !== "done")) continue;
+      out.push({ rootId, path, spec, resumed });
     }
   }
   return out;

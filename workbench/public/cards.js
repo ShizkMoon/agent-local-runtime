@@ -1,11 +1,11 @@
 // aica workbench · 渲染单元：共享小工具 + stream item → HTML（纯函数，无状态）
-
+// 依据 docs/workbench-ui.md §7.3：MessageBubble 非气泡、GateCard 确认分级、ToolCard 左缘工具色条
 export const esc = (s) => String(s ?? "").replace(/[&<>"']/g,
   c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
 export const CHIP = {
-  done: "chip-ok", failed: "chip-err", running: "chip-warn", waiting: "chip-wait",
-  blocked: "chip-blk", split: "chip-split", me: "chip-wait", spec: "", empty: "",
+  done: "chip-ok", failed: "chip-err", running: "chip-run", waiting: "chip-info",
+  blocked: "chip-warn", split: "chip-info", me: "chip-info", spec: "", empty: "",
 };
 export const chip = (st) => `<span class="chip ${CHIP[st] ?? ""}">${esc(st)}</span>`;
 
@@ -39,7 +39,7 @@ export const md = (text) =>
 
 const trunc = (s, n = 90) => { s = String(s ?? "").replace(/\s+/g, " ").trim(); return s.length > n ? s.slice(0, n) + "…" : s; };
 
-// ---- 工具 meta：kind → 图标/色类（卡片左边框色 = kind accent）----
+// ---- 工具 meta：kind → 图标/色类（工具色仅用于卡左缘 3px + icon）----
 const TOOL_KIND = {
   file: { i: "🗎", cls: "tk-file" }, bash: { i: "$", cls: "tk-bash" },
   powershell: { i: "❯", cls: "tk-ps" }, desktop: { i: "🖥", cls: "tk-desktop" },
@@ -49,7 +49,8 @@ const TOOL_KIND = {
 const TOOL_MAP = {
   read: "file", write: "file", edit: "file", ls: "file", find: "file", glob: "file", grep: "file",
   bash: "bash", sh: "bash", powershell: "powershell", pwsh: "powershell", cmd: "powershell",
-  desktop: "desktop", browser: "browser", webfetch: "browser", web_search: "browser",
+  desktop: "desktop", agent_desktop: "desktop", browser: "browser", ego_browser: "browser",
+  webfetch: "browser", web_search: "browser",
   kn_recall: "kn", kn_save: "kn", kn_search: "kn",
   ar_read: "ar", ar_dispatch: "ar", ar_check: "ar", ar_reply: "ar", node_create: "ar",
   ev_done: "ev", ev_fail: "ev", ev_event: "ev",
@@ -88,8 +89,8 @@ function artRefs(...texts) {
 
 // ---- item renderers（fresh → .enter 追加动画）----
 
-/** tool 卡片：kind 色左边框 + icon + name + args 预览 + 状态 chip + 时长；点击平滑展开 args/result + artifact chips */
-export function toolCard(it, expanded, fresh) {
+/** ToolCard：头部单行 icon+名+args 预览+时长+chip；默认折叠；live(运行中)呼吸+自动展开 */
+export function toolCard(it, open, fresh) {
   const { i, cls } = TOOL_KIND[toolKind(it.tool ?? "")];
   const st = it.done ? (it.is_error ? "err" : "ok") : "run";
   const stChip = st === "ok" ? `<span class="chip chip-ok">ok</span>`
@@ -97,7 +98,7 @@ export function toolCard(it, expanded, fresh) {
     : `<span class="chip chip-run">running</span>`;
   const dur = it.duration_ms != null ? `<span class="dur">${it.duration_ms}ms</span>` : "";
   const arts = artRefs(it.args, it.output);
-  return `<div class="tc ${cls} ${st === "err" ? "tc-err" : ""} ${expanded ? "open" : ""} ${fresh ? "enter" : ""}" data-key="${it.skey}">
+  return `<div class="tc ${cls} ${st === "err" ? "tc-err" : ""} ${st === "run" ? "live" : ""} ${open ? "open" : ""} ${fresh ? "enter" : ""}" data-key="${it.skey}">
     <div class="tc-head" data-act="toggle">
       <span class="tico">${i}</span><b class="tname">${esc(it.tool)}</b>
       <span class="targs">${esc(argsPreview(it.args))}</span><span class="spacer"></span>
@@ -106,7 +107,7 @@ export function toolCard(it, expanded, fresh) {
     <div class="tc-body"><div class="tc-inner">
       ${it.args ? `<div class="tc-label">args</div><pre>${esc(trunc(pretty(it.args), 3000))}</pre>` : ""}
       <div class="tc-label">result</div>
-      ${it.output ? `<pre>${esc(trunc(it.output, 4000))}</pre>` : `<pre class="dim">（暂无输出）</pre>`}
+      ${it.output ? `<pre>${esc(trunc(it.output, 4000))}</pre>` : `<pre class="dim">（执行中…）</pre>`}
       ${arts.length ? `<div class="tc-arts">${arts.map(a =>
         `<span class="chip art" data-act="art" data-node="${esc(it.node)}" data-name="${esc(a)}">📎 ${esc(a)}</span>`).join("")}</div>` : ""}
       <div class="tc-acts"><button data-act="sheet" data-key="${it.key}">完整事件 ⇗</button></div>
@@ -114,11 +115,16 @@ export function toolCard(it, expanded, fresh) {
   </div>`;
 }
 
-/** agent 气泡：marked 渲染正文 */
+/** MessageBubble（§7.3）：assistant = prose 直排 + 左缘 accent 细线（非气泡）；
+    user/system = 浅底小框右对齐 */
 export function msgBubble(it, fresh) {
   const meta = [it.tokens ? `${it.tokens} tok` : "", it.stop && it.stop !== "endTurn" ? it.stop : ""]
     .filter(Boolean).join(" · ");
-  return `<div class="msg ${fresh ? "enter" : ""}" data-key="${it.skey}">
+  if (it.role && it.role !== "assistant")
+    return `<div class="umsg ${fresh ? "enter" : ""}" data-key="${it.skey}">
+      <div class="mhead"><span class="mrole">${esc(it.role)}</span><span class="ntag">${esc(it.node)}</span><time>${fmtTs(it.ts)}</time></div>
+      <div class="mbody md">${md(it.text)}</div></div>`;
+  return `<div class="amsg ${fresh ? "enter" : ""}" data-key="${it.skey}">
     <div class="mhead"><span class="mrole">${esc(it.role ?? "agent")}</span>
       <span class="ntag">${esc(it.node)}</span>${meta ? `<span class="dim">${esc(meta)}</span>` : ""}
       <time>${fmtTs(it.ts)}</time></div>
@@ -158,19 +164,42 @@ export function markRow(it, fresh) {
   </div>`;
 }
 
-/** gate：问题 + 快捷选项 + 回复输入（POST reply 到该节点） */
+/** 节点失败卡：result.status=failed 的流内 err 卡（五态之失败态） */
+export function errCard(it, fresh) {
+  const d = it.data ?? {};
+  return `<div class="errcard ${fresh ? "enter" : ""}" data-key="${it.skey}">
+    <div class="ec-head"><span class="mki">✕</span><b>节点失败</b><span class="ntag">${esc(it.node)}</span>
+      <span class="spacer"></span><time>${fmtTs(it.ts)}</time></div>
+    <div class="ec-body">${esc(d.summary ?? "（无摘要）")}</div>
+  </div>`;
+}
+
+/** GateCard 确认分级（ADR 0002）：付款/删除/对外发布 → --err 描边 + 明示后果按钮 */
+export function gateTier(d) {
+  const kind = String(d?.confirm_kind ?? d?.kind ?? "").toLowerCase();
+  if (["pay", "payment", "delete", "publish", "payment_confirm"].includes(kind)) return "err";
+  const text = [d?.question, ...(Array.isArray(d?.options) ? d.options : [])].join(" ");
+  return /付款|支付|删除|对外发布|发布|外传|publish|delete|pay\b/i.test(text) ? "err" : "warn";
+}
+
 export function gateCard(it, draft, fresh) {
   const d = it.data ?? {};
   const opts = Array.isArray(d.options) ? d.options : [];
-  return `<div class="gate ${fresh ? "enter" : ""}" data-key="${it.skey}">
-    <div class="ghead"><span class="mki">◆</span><b>gate</b><span class="ntag">${esc(it.node)}</span>
-      <span class="spacer"></span><time>${fmtTs(it.ts)}</time></div>
+  const tier = gateTier(d);
+  return `<div class="gate ${tier === "err" ? "gate-err" : ""} ${fresh ? "enter" : ""}" data-key="${it.skey}">
+    <div class="ghead"><span class="mki">◆</span><b>gate${tier === "err" ? " · 高风险确认" : ""}</b>
+      <span class="ntag">${esc(it.node)}</span><span class="spacer"></span><time>${fmtTs(it.ts)}</time></div>
     <div class="gq">${esc(d.question ?? "等待人工输入")}</div>
     ${opts.length ? `<div class="gopts">${opts.map(o =>
-      `<button class="gopt" data-act="gate-opt" data-node="${esc(it.node)}" data-text="${esc(o)}">${esc(o)}</button>`).join("")}</div>` : ""}
+      `<button class="gopt ${tier === "err" ? "gopt-err" : ""}" data-act="gate-opt" data-node="${esc(it.node)}" data-text="${esc(o)}">${tier === "err" ? "确认：" : ""}${esc(o)}</button>`).join("")}</div>` : ""}
     <div class="greply">
-      <input class="ginput" data-node="${esc(it.node)}" placeholder="回复该节点…" value="${esc(draft ?? "")}">
+      <input class="ginput" data-node="${esc(it.node)}" placeholder="${tier === "err" ? "输入确认指令（将按原样执行后果操作）…" : "回复该节点…"}" value="${esc(draft ?? "")}">
       <button data-act="gate-send" data-node="${esc(it.node)}">发送</button>
     </div>
   </div>`;
 }
+
+/** skeleton shimmer：流首载占位（加载态） */
+export const skeletonHtml = () => `
+  <div class="skel"><div class="skel-line" style="width:38%"></div><div class="skel-line" style="width:72%"></div><div class="skel-line" style="width:56%"></div></div>
+  <div class="skel"><div class="skel-line" style="width:64%"></div><div class="skel-line" style="width:30%"></div></div>`;
