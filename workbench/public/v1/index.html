@@ -183,11 +183,13 @@ button:focus:not(:focus-visible){outline:none}
 @keyframes breath{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.5;transform:scale(.72)}}
 .dur{margin-left:auto;font-family:var(--f-mono);font-size:12px;color:var(--t3);font-variant-numeric:tabular-nums;flex:none}
 
-/* Settled = 纯展示退行，不可点 */
+/* Settled = 退行，可点开看节点明细 */
 .set-row{
-  display:flex;align-items:center;gap:10px;height:32px;
+  display:flex;align-items:center;gap:10px;height:32px;width:100%;
   padding:0 10px;font-size:14px;color:var(--t2);white-space:nowrap;
+  border-radius:var(--r-ctl);transition:background var(--t-ui) var(--e),color var(--t-ui) var(--e);
 }
+.set-row:hover{background:var(--hov);color:var(--t1)}
 .set-row .t{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis}
 .set-row .tm{flex:none;font-family:var(--f-mono);font-size:12px;color:var(--t3);font-variant-numeric:tabular-nums}
 
@@ -559,6 +561,7 @@ var esc = function(s){
   });
 };
 var currentRun = 0;
+var pendingSelectId = null;   /* 新派发的 run id：下次 view 拉取后选中它 */
 var sheetTimer = 0;
 var subsNd = null;   /* 子代理页签当前下钻到的节点（按 nm 在刷新后重定位） */
 
@@ -613,7 +616,9 @@ function applyView(d){
   });
 
   var idx = 0;
-  if(prevId != null){
+  if(pendingSelectId != null){
+    for(var i=0;i<RUNS.length;i++){ if(RUNS[i].id===pendingSelectId){ idx=i; pendingSelectId=null; break; } }
+  }else if(prevId != null){
     for(var i=0;i<RUNS.length;i++){ if(RUNS[i].id===prevId){ idx=i; break; } }
   }
   currentRun = RUNS.length ? Math.min(idx, RUNS.length-1) : 0;
@@ -649,12 +654,30 @@ function renderSidebar(){
       '<span class="ttl">'+esc(r.title)+'</span>'+
       '<span class="meta">'+esc(r.snippet)+'</span></button>';
   }).join("") : '<div class="empty-note">暂无运行中的任务</div>';
-  $("#settledList").innerHTML = SETTLED.length ? SETTLED.map(function(s){
-    return '<div class="set-row"><span class="t">'+esc(s[0])+'</span><span class="tm">'+esc(s[1])+'</span></div>';
+  $("#settledList").innerHTML = SETTLED.length ? SETTLED.map(function(s,i){
+    return '<button class="set-row" data-s="'+i+'"><span class="t">'+esc(s[0])+'</span><span class="tm">'+esc(s[1])+'</span></button>';
   }).join("") : '<div class="empty-note">暂无记录</div>';
+  each("#settledList .set-row",function(el){
+    el.addEventListener("click",function(){ openSettled(SETTLED[+el.dataset.s]); });
+  });
   each(".run-card",function(el){
     el.addEventListener("click",function(){ selectRun(+el.dataset.run); });
   });
+}
+/* 已结束 run → sheet 展示节点明细（只读） */
+function openSettled(s){
+  var id = s[2];
+  if(!id) return;
+  fetch("/api/runs/"+encodeURIComponent(id)+"/tree").then(function(r){return r.json();}).then(function(d){
+    var nodes = d.nodes||[];
+    openSheetFor({
+      nm:s[0], st:"done",
+      sum:"已完成 · "+(s[1]||""),
+      steps:nodes.map(function(n){
+        return {t:(n.finished_at||"").slice(11,19), a:n.nm||n.path, r:n.summary||n.status, st:n.status==="done"?"ok":"err"};
+      })
+    });
+  }).catch(function(){});
 }
 
 /* ================= center: task view ================= */
@@ -1088,7 +1111,7 @@ $("#sendBtn").addEventListener("click",function(){
       budget:DIALS[3][1][dsel[3]]   /* 推理 → budget */
     })})
     .then(function(r){ if(!r.ok) throw new Error("HTTP "+r.status); return r.json(); })
-    .then(function(){ scheduleFetch(); })
+    .then(function(d){ if(d&&d.root_id) pendingSelectId=d.root_id; scheduleFetch(); })
     .catch(function(e){
       var ack = document.createElement("div");
       ack.className = "atext";

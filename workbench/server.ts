@@ -265,7 +265,7 @@ function apiView(res: any): void {
     const allDone = nodes.length > 0 && nodes.every(n => n.r?.status === "done");
     const ended = nodes.map(n => n.r?.finished_at).filter(Boolean).sort().pop() as string | undefined;
     if (allDone) {   // 全部节点 done 的 run 不进 runs，进 settled
-      settled.push([meta?.subject ?? rootId, hhmm(ended ?? meta?.created_at ?? new Date().toISOString())]);
+      settled.push([meta?.subject ?? rootId, hhmm(ended ?? meta?.created_at ?? new Date().toISOString()), rootId]);
       continue;
     }
     const status = waiting.length ? "input" : "working";  // failed 也算 working（简单聚合）
