@@ -2,11 +2,12 @@
 // 会话边界原因：Session 0 服务碰不到桌面，agent-desktop/ego 只能在交互会话工作
 import { spawn, execFileSync } from "node:child_process";
 import { appendFileSync, existsSync, readFileSync, mkdirSync, copyFileSync, writeFileSync, unlinkSync, statSync } from "node:fs";
-import { join, dirname, isAbsolute } from "node:path";
+import { join, dirname, isAbsolute, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { pendingNodes, appendEvent, readResult, writeResult, patchResult, writeSpec, writeWorker, clearWorker, abortWorker, nodeDir, RUNS_DIR, STATE, DEFAULT_PARALLEL, writeCheckpoint, readCheckpoint, lastSeq, closeDanglingTools } from "./runs.ts";
 import { tapStdout, readUsage, usageTokens, type UsageLedger, type UsageTurn } from "./transcribe.ts";
 import type { SpecEnvelope } from "./envelope.ts";
+import { isProfile } from "./envelope.ts";
 
 const POLL_MS = Number(process.env.AR_POLL_MS ?? 2000);
 // S22：并发以 run 为单位（run.json.parallel / spec.budget.parallel，默认 2，见 runs.pendingNodes）。
@@ -92,7 +93,12 @@ const LEARNED_INJECT_CAP = 2000;
 // R3 B3：@file 引用 —— 单文件 ≤8KB、总量 ≤32KB；缺失注入 [缺失] 标记并交给调用方记 input 事件（不阻塞拉起）
 export const AT_REF_FILE_CAP = 8 * 1024;
 export const AT_REF_TOTAL_CAP = 32 * 1024;
-export interface AtRef { ref: string; ok: boolean; bytes: number; truncated?: boolean; denied?: string }
+export interface AtRef {
+  ref: string; ok: boolean; bytes: number; truncated?: boolean; denied?: string;
+  base?: string;          // 命中的基准标签（repo / node），缺失时是试过的基准
+  resolved?: string;      // 命中/被拒的实际路径
+}
+export interface AtRefBase { label: string; dir: string }
 
 /** @file 守门：.git 与运行时 STATE 不进 prompt（@ 是绕过 gate 的直接读，控制面/别的节点的 gate/result 不能这样泄漏） */
 function atRefDenied(abs: string): string | null {
@@ -103,55 +109,100 @@ function atRefDenied(abs: string): string | null {
   return null;
 }
 
-/** 从 goal 里抽 @path：行首/空白后起头，遇到空白或中英文标点结束；同一条只注入一次 */
-export function expandAtRefs(goal: string, baseDir: string, onMissing?: (ref: string, reason?: string) => void): { text: string; refs: AtRef[] } {
+/** @ref 基准顺序（R3）：AICA_REPO_ROOT → runs 目录向上找到的仓库根（package.json/.git）→ 节点目录。
+ *  STATE 放在仓库里（测试/演示）时第二档能定位到仓库根；生产建议显式设 AICA_REPO_ROOT。 */
+export function atRefBases(nodeDir: string): AtRefBase[] {
+  const out: AtRefBase[] = [];
+  const seen = new Set<string>();
+  const push = (label: string, dir: string): void => {
+    try {
+      const d = resolve(dir);
+      const k = d.toLowerCase();
+      if (seen.has(k)) return;
+      seen.add(k);
+      out.push({ label, dir: d });
+    } catch { /* 非法路径忽略 */ }
+  };
+  if (process.env.AICA_REPO_ROOT) push("repo", process.env.AICA_REPO_ROOT);
+  try {
+    let d = RUNS_DIR;
+    for (let i = 0; i < 8; i++) {
+      const parent = dirname(d);
+      if (parent === d) break;
+      d = parent;
+      if (existsSync(join(d, "package.json")) || existsSync(join(d, ".git"))) { push("repo", d); break; }
+    }
+  } catch { /* RUNS_DIR 读不到时只保留节点基准 */ }
+  push("node", nodeDir);
+  return out;
+}
+
+/** 从 goal 里抽 @path：行首/空白后起头，遇到空白或中英文标点结束；同一条只注入一次。
+ *  相对路径按 bases 顺序试，命中哪个把 label 记在 info.base；绝对路径直接读。 */
+export function expandAtRefs(
+  goal: string,
+  bases: string | AtRefBase[],
+  onRef?: (ref: string, info: AtRef) => void,
+): { text: string; refs: AtRef[] } {
+  const list: AtRefBase[] = typeof bases === "string" ? [{ label: "node", dir: bases }] : bases;
   const refs: AtRef[] = [];
   const blocks: string[] = [];
   const seen = new Set<string>();
   let budget = AT_REF_TOTAL_CAP;
+  const emit = (info: AtRef): void => { refs.push(info); onRef?.(info.ref, info); };
   for (const m of String(goal ?? "").matchAll(/(^|[\s(（])@([^\s]+)/g)) {
     const ref = m[2].replace(/[)\]）】,.;:!?，。；：！？]+$/g, "");
     if (!ref || seen.has(ref)) continue;
     seen.add(ref);
-    const abs = isAbsolute(ref) ? ref : join(baseDir, ref);
-    const denied = atRefDenied(abs);
+    const tried: AtRefBase[] = isAbsolute(ref) ? [{ label: "abs", dir: "" }] : list;
+    let hit: { abs: string; base: string } | null = null;
+    let denied: { reason: string; abs: string } | null = null;
+    for (const b of tried) {
+      const abs = isAbsolute(ref) ? ref : join(b.dir, ref);
+      const d = atRefDenied(abs);
+      if (d) { denied = { reason: d, abs }; break; }   // 守门优先于"其它基准里可能存在"
+      try { if (existsSync(abs) && statSync(abs).isFile()) { hit = { abs, base: b.label }; break; } }
+      catch { /* 读不到就试下一个基准 */ }
+    }
     if (denied) {
-      refs.push({ ref, ok: false, bytes: 0, denied });
-      blocks.push(`- [拒绝] ${ref}（${denied}：@ 不读控制面）`);
-      onMissing?.(ref, denied);
+      blocks.push(`- [拒绝] ${ref}（${denied.reason}：@ 不读控制面）`);
+      emit({ ref, ok: false, bytes: 0, denied: denied.reason, resolved: denied.abs, base: tried[0]?.label });
+      continue;
+    }
+    if (!hit) {
+      blocks.push(`- [缺失] ${ref}`);
+      emit({ ref, ok: false, bytes: 0, base: tried.map((t) => t.label).join(",") });
       continue;
     }
     let buf: Buffer | null = null;
-    try { if (existsSync(abs) && statSync(abs).isFile()) buf = readFileSync(abs); }
-    catch { buf = null; }
+    try { buf = readFileSync(hit.abs); } catch { buf = null; }
     if (!buf) {
-      refs.push({ ref, ok: false, bytes: 0 });
       blocks.push(`- [缺失] ${ref}`);
-      onMissing?.(ref, "文件不存在");
+      emit({ ref, ok: false, bytes: 0, base: hit.base, resolved: hit.abs });
       continue;
     }
     if (budget <= 0) {
-      refs.push({ ref, ok: true, bytes: 0, truncated: true });
       blocks.push(`### ${ref}\n\n…[超出注入总量上限（${AT_REF_TOTAL_CAP} 字节），未注入]`);
+      emit({ ref, ok: true, bytes: 0, truncated: true, base: hit.base, resolved: hit.abs });
       continue;
     }
     const take = buf.subarray(0, Math.min(AT_REF_FILE_CAP, budget));
     const truncated = take.length < buf.length;
     budget = Math.max(0, budget - take.length);
-    refs.push({ ref, ok: true, bytes: take.length, ...(truncated ? { truncated } : {}) });
     blocks.push(`### ${ref}\n\n\`\`\`\n${take.toString("utf8")}${truncated ? "\n…[已截断：超出注入上限]" : ""}\n\`\`\``);
+    emit({ ref, ok: true, bytes: take.length, base: hit.base, resolved: hit.abs, ...(truncated ? { truncated } : {}) });
   }
   if (!refs.length) return { text: "", refs };
   return { text: ["## 引用文件", ...blocks].join("\n\n"), refs };
 }
 
 /** user message = 变量部分（worker.md 规则走 --append-system-prompt 保证前缀稳定可缓存）；resumed = waiting 回复后恢复拉起
- *  R3：baseDir 用于解析 @file（节点目录，= worker cwd）；onMissingAtRef 让调用方记 input 事件 */
+ *  R3：baseDir 用于解析 @file（节点目录，= worker cwd）；onAtRef 让调用方记 input 事件（带 base） */
 export function userMessage(
   spec: SpecEnvelope,
   resumed = false,
   baseDir = process.cwd(),
-  onMissingAtRef?: (ref: string, reason?: string) => void,
+  onAtRef?: (ref: string, info: AtRef) => void,
 ): string {
   const lines = [spec.goal, "", "## 节点上下文"];
   lines.push(`- node_id: ${spec.id}`);
@@ -161,8 +212,8 @@ export function userMessage(
   if (spec.budget?.depth_left !== undefined) lines.push(`- depth_left: ${spec.budget.depth_left}`);
   lines.push("- artifacts 目录: artifacts/（相对当前工作目录；大输出落盘回 ref）");
   lines.push("- 结束时必须调用 ev_done（成功）或 ev_fail（失败），否则按退出码兜底");
-  // R3 B3：@file 引用（内容照原样注入，worker 当资料不当指令）
-  const at = expandAtRefs(spec.goal ?? "", baseDir, onMissingAtRef);
+  // R3 B3：@file 引用（基准 = repo → runs 祖先 → 节点目录；内容照原样注入，worker 当资料不当指令）
+  const at = expandAtRefs(spec.goal ?? "", atRefBases(baseDir), onAtRef);
   if (at.text) lines.push("", at.text);
   // R3 D5：plan 档的产出契约（prompt 里讲方法，这里钉死落盘位置与回传字段）
   if (spec.profile === "plan") {
@@ -236,7 +287,7 @@ export function launcher(
   spec: SpecEnvelope,
   resumed = false,
   dir?: string,
-  onMissingAtRef?: (ref: string, reason?: string) => void,
+  onAtRef?: (ref: string, info: AtRef) => void,
 ): { file: string; args: string[]; desc: string } {
   const agent = spec.agent ?? "pi";
   switch (agent) {
@@ -260,7 +311,7 @@ export function launcher(
         "-e", join(AICA_PI, "extensions", "gate.ts"),
         // S14 skills 显式挂载：--no-skills 下 --skill <path> 仍会加载（pi cli.md:202）
         ...(spec.skills ?? []).flatMap((s) => ["--skill", join(AICA_PI, "skills", String(s))]),
-        "--", userMessage(spec, resumed, dir ?? process.cwd(), onMissingAtRef),
+        "--", userMessage(spec, resumed, dir ?? process.cwd(), onAtRef),
       ];
       return { file: process.execPath, args, desc: `node ${cli} -p ... [${agent}/${profile} ${model}]` };
     }
@@ -382,17 +433,30 @@ export function enforceTokenBudget(
   return "exceeded";
 }
 
+/** R3：profile 闭集兜底 —— 入口已拒非法值；历史 spec / 继承来的非法值按 worker 跑，并留一条 input 警告 */
+export function normalizeProfile(rootId: string, path: string, spec: SpecEnvelope): SpecEnvelope {
+  if (!spec.profile || isProfile(spec.profile)) return spec;
+  appendEvent(rootId, path, { kind: "input", data: { field: "profile", value: String(spec.profile), action: "未知 profile → 按 worker 处理" } });
+  return { ...spec, profile: "worker" };
+}
+
 function spawnWorker(rootId: string, path: string, spec: SpecEnvelope, resumed = false, retried = false): void {
   const dir = nodeDir(rootId, path);
+  spec = normalizeProfile(rootId, path, spec);
   running.add(spec.id);
   // S21：续跑时先把上一轮没收回的 tool_call 补成 aborted 的工具结果（进程中断后它们永远不会返回）
   const dangling = resumed ? closeDanglingTools(rootId, path) : 0;
   const mspec = materializeInputs(rootId, path, spec);   // S14：art:// 先物化，userMessage 见 inputs/<file>
   let file: string, args: string[], desc: string;
   try {
-    ({ file, args, desc } = launcher(mspec, resumed, dir, (ref, reason) => {
-      // R3 B3：@file 缺失/被拒继续拉起（复用 S14 skip 语义），但留 input 事件作证据
-      appendEvent(rootId, path, { kind: "input", data: { ref, skipped: reason ?? "@file 不可用（已注入标记）" } });
+    ({ file, args, desc } = launcher(mspec, resumed, dir, (ref, info) => {
+      // R3 B3：@file 命中的基准/缺失/被拒都留 input 事件（复用 S14 skip 语义，不阻塞拉起）
+      appendEvent(rootId, path, {
+        kind: "input",
+        data: info.ok
+          ? { ref, base: info.base, bytes: info.bytes, ...(info.truncated ? { truncated: true } : {}) }
+          : { ref, skipped: info.denied ?? "@file 缺失", ...(info.base ? { base: info.base } : {}) },
+      });
     }));
   } catch (e) {
     running.delete(spec.id);

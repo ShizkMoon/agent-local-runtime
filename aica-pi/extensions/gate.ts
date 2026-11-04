@@ -431,7 +431,9 @@ function stateRoot(): string {
  * 节点目录里的 artifacts/、session/ 是数据面（worker 天天写，不该每次弹窗）；
  * 其余（spec/result/worker/gate/grants/loop/usage/事件、run.json、plan、daemon.pid、memory…）算控制面。
  */
-export function controlPlaneHit(candidates: string[], cwd = process.cwd()): string | null {
+/** 控制面判定。readOnly=true（read/ls/find/grep/ar_read）时 aica-pi/** 放行——
+ *  plan/调研要能读运行时源码；写与执行仍恒问。.git/** 与 STATE 控制文件任何档位都拦。 */
+export function controlPlaneHit(candidates: string[], cwd = process.cwd(), opts: { readOnly?: boolean } = {}): string | null {
   const state = stateRoot();
   const node = process.env.AICA_STATE && process.env.AR_ROOT_ID && process.env.AR_NODE_PATH
     ? resolvePath(state, "runs", process.env.AR_ROOT_ID, "nodes", process.env.AR_NODE_PATH)
@@ -440,20 +442,29 @@ export function controlPlaneHit(candidates: string[], cwd = process.cwd()): stri
   const nodeKey = node ? criticalKey(node) : "";
   for (const raw of candidates) {
     const cand = stripQuotes(raw);
-    // 无路径分隔符的 spec.json（命令里 `cat spec.json`）也要认：按控制面文件处理
-    const base = normPath(cand).split("\\").filter(Boolean).pop() ?? "";
-    if (base === "spec.json") return raw;
     const segs = pathSegments(cand, cwd);
-    if (segs.includes("aica-pi")) return raw;
-    if (!state) continue;
+    // .git/**：任何档位都拦（配置/凭据/历史，读也不给）
+    if (segs.includes(".git")) return raw;
+    // aica-pi/**（运行时自身）：写/执行恒问；只读工具放行
+    if (segs.includes("aica-pi") && !opts.readOnly) return raw;
+    const base = normPath(cand).split("\\").filter(Boolean).pop() ?? "";
+    if (!state) {
+      // 没有 STATE 时也要拦裸 spec.json（命令里 `cat spec.json`）——按控制面文件处理
+      if (base === "spec.json") return raw;
+      continue;
+    }
     let abs: string;
     try { abs = resolvePath(cwd, expandVars(cand, cwd)); } catch { continue; }
     const key = criticalKey(abs, cwd);
+    const mine = !!nodeKey && (key === nodeKey || key.startsWith(nodeKey + "\\"));
+    // 裸 spec.json 只有在"只读工具 + 本节点自己的 spec"时才放行
+    if (base === "spec.json" && !(opts.readOnly && mine)) return raw;
     // 节点目录本身上下都是数据面（worker 的 cwd；`ls .`/`ls <node>` 不该被当成控制面）
     if (nodeKey && key === nodeKey) continue;
     // 节点目录里的已知控制文件（spec/result/worker/gate*/grants/loop/usage/checkpoint/perm-*）算控制面；
-    // 其余（artifacts/、session/、dist/、任意工作文件）是数据面 —— worker 天天写，不该每次弹窗。
-    if (nodeKey && key.startsWith(nodeKey + "\\")) {
+    // 只读工具读自己节点的不拦（spec/result/events 是它自己的输入输出）。
+    if (mine) {
+      if (opts.readOnly) continue;
       const rel = key.slice(nodeKey.length + 1);
       const leaf = rel.split("\\").pop() ?? "";
       if (/^(spec|result|result\.resolved|worker|gate|gate-req|gate-ans|grants|loop|usage|checkpoint|review-req)\.json$/i.test(leaf)) return raw;
@@ -573,8 +584,8 @@ export function resolveCall(spec: GateSpec, tool: string, args: unknown, grants:
     } catch { /* 坏正则跳过该条 */ }
   }
 
-  // 3) restricted：必问且不可记住（控制面 + restricted_paths）
-  const ctrl = controlPlaneHit(cands, cwd);
+  // 3) restricted：必问且不可记住（控制面 + restricted_paths）；只读工具对 aica-pi/** 放行
+  const ctrl = controlPlaneHit(cands, cwd, { readOnly: t === "read" });
   if (ctrl) {
     return { ...base, action: "ask", hit: "control", pattern: ctrl, restricted: true,
       reason: `控制面（${ctrl}）：任何权限档都要人确认，且不能记住。` };

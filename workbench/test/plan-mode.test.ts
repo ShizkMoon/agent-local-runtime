@@ -97,3 +97,77 @@ test("finalizePlanArtifact：plan 节点 done 后用 summary 兜底写 artifacts
   D.finalizePlanArtifact(b.rootId, "root", spec());
   assert.equal(existsSync(join(R.nodeDir(b.rootId, "root"), "artifacts", "plan.md")), false);
 });
+
+test("profile 闭集：入口拒非法值（BAD_INPUT + 非 0 退出），daemon 兜底按 worker 并记 input 警告", async () => {
+  const { spawnSync } = await import("node:child_process");
+  const cli = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "src", "cli.ts");
+  const env = { ...process.env, AICA_STATE: STATE };
+
+  const bad = spawnSync(process.execPath, [cli, "node-create", "--run", "whatever", "--path", "root", "--goal", "g", "--profile", "plna"], { encoding: "utf8", env });
+  assert.equal(bad.status, 1, "G-1：失败必须非 0 退出");
+  const bj = JSON.parse(String(bad.stdout).trim().split("\n").pop()!);
+  assert.equal(bj.ok, false);
+  assert.equal(bj.error.code, "BAD_INPUT");
+  assert.match(bj.error.message, /profile 只接受/);
+  assert.equal(/ at .*\.ts:\d+/.test(String(bj.error.message)), false, "无裸栈");
+
+  const disp = spawnSync(process.execPath, [cli, "dispatch"], { encoding: "utf8", env, input: JSON.stringify({ subject: "s", profile: "plna" }) });
+  assert.equal(disp.status, 1);
+  assert.equal(JSON.parse(String(disp.stdout).trim().split("\n").pop()!).error.code, "BAD_INPUT");
+
+  // 合法值照常通过
+  const okRun = R.createRun({ subject: "profile ok" });
+  const good = spawnSync(process.execPath, [cli, "node-create", "--run", okRun.rootId, "--path", "root", "--goal", "g", "--profile", "plan"], { encoding: "utf8", env });
+  assert.equal(good.status, 0, String(good.stdout) + String(good.stderr));
+  assert.equal(R.readSpec(okRun.rootId, "root")?.profile, "plan");
+
+  // 运行期兜底：历史 spec 里的非法 profile → 按 worker 跑 + input 警告
+  const legacy = R.createRun({ subject: "legacy profile" });
+  R.writeSpec(legacy.rootId, "root", spec({ profile: "plna" }));
+  const norm = D.normalizeProfile(legacy.rootId, "root", R.readSpec(legacy.rootId, "root")!);
+  assert.equal(norm.profile, "worker");
+  assert.ok(D.toolAllowlist(norm).includes("bash"), "兜底后按 worker 的工具面跑");
+  const warn = R.readEvents(legacy.rootId, "root").filter((e) => e.kind === "input" && e.data.field === "profile");
+  assert.equal(warn.length, 1, "记一条 input 警告");
+  assert.equal(warn[0].data.value, "plna");
+});
+
+test("gate：只读工具能读 aica-pi 源码（plan 的意义），写 aica-pi / 读 .git / 别的 run 控制文件仍拦", async () => {
+  const G = await import("../../aica-pi/extensions/gate.ts");
+  const repo = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
+  const mine = R.createRun({ subject: "gate plan" });
+  R.writeSpec(mine.rootId, "root", spec({ profile: "plan" }));
+  const prev = { root: process.env.AR_ROOT_ID, node: process.env.AR_NODE_PATH };
+  process.env.AR_ROOT_ID = mine.rootId;
+  process.env.AR_NODE_PATH = "root";
+  try {
+    for (const tool of ["read", "ls", "find", "grep", "ar_read"]) {
+      const r = G.resolveCall({ permission: "supervised" }, tool, { path: join(repo, "aica-pi") }, [], repo);
+      assert.equal(r.action, "allow", `${tool} 读 aica-pi 应放行（不再弹审批）`);
+    }
+    const w = G.resolveCall({ permission: "full" }, "write", { path: join(repo, "aica-pi", "x.ts") }, [], repo);
+    assert.equal(w.action, "ask", "写 aica-pi 仍要批");
+    assert.equal(w.hit, "control");
+    const bash = G.resolveCall({ permission: "full" }, "bash", { command: "cat aica-pi/extensions/gate.ts" }, [], repo);
+    assert.equal(bash.action, "ask", "执行面读 aica-pi 仍要批（bash 不是只读工具）");
+
+    const gitRead = G.resolveCall({ permission: "full" }, "read", { path: join(repo, ".git", "config") }, [], repo);
+    assert.equal(gitRead.action, "ask", ".git 读也拦");
+
+    // 本节点自己的控制文件：只读工具放行（worker 看自己的 spec/result 是常态），写仍拦
+    const nodeDir = R.nodeDir(mine.rootId, "root");
+    assert.equal(G.resolveCall({ permission: "supervised" }, "read", { path: join(nodeDir, "spec.json") }, [], repo).action, "allow");
+    assert.equal(G.resolveCall({ permission: "full" }, "read", { path: "spec.json" }, [], nodeDir).action, "allow", "裸 spec.json + cwd=节点目录");
+    assert.equal(G.resolveCall({ permission: "full" }, "write", { path: join(nodeDir, "spec.json") }, [], repo).action, "ask", "写自己的 spec 仍要批");
+
+    const other = R.createRun({ subject: "other run" });
+    R.writeSpec(other.rootId, "root", spec());
+    R.writeResult(other.rootId, "root", { status: "done", summary: "x" });
+    const st = G.resolveCall({ permission: "full" }, "read", { path: join(R.nodeDir(other.rootId, "root"), "result.json") }, [], repo);
+    assert.equal(st.action, "ask", "别的 run 的 STATE 控制文件：只读也拦");
+    assert.equal(st.hit, "control");
+  } finally {
+    if (prev.root === undefined) delete process.env.AR_ROOT_ID; else process.env.AR_ROOT_ID = prev.root;
+    if (prev.node === undefined) delete process.env.AR_NODE_PATH; else process.env.AR_NODE_PATH = prev.node;
+  }
+});

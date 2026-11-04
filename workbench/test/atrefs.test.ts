@@ -5,8 +5,12 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const STATE = mkdtempSync(join(tmpdir(), "aica-r3-at-state-"));
+// 目录布局模拟"STATE 放在仓库里"：R/package.json + R/state/runs → atRefBases 能向上找到仓库根 R
+const R = mkdtempSync(join(tmpdir(), "aica-r3-at-repo-"));
+writeFileSync(join(R, "package.json"), "{\"name\":\"r3-at\"}\n", "utf8");
+const STATE = join(R, "state");
 process.env.AICA_STATE = STATE;
+mkdirSync(join(STATE, "runs"), { recursive: true });
 const D = await import("../../src/daemon.ts");
 
 const BASE = mkdtempSync(join(tmpdir(), "aica-r3-at-"));
@@ -29,7 +33,7 @@ test("expandAtRefs：存在的文件按原文注入，段落头是「## 引用�
 
 test("expandAtRefs：缺失 → [缺失] 标记 + 回调（daemon 用它记 input 事件），不丢其它引用", () => {
   const missing: string[] = [];
-  const r = D.expandAtRefs("看 @a.md 和 @nope.md", BASE, (ref) => missing.push(ref));
+  const r = D.expandAtRefs("看 @a.md 和 @nope.md", BASE, (ref, info) => { if (!info.ok) missing.push(ref); });
   assert.deepEqual(missing, ["nope.md"]);
   assert.match(r.text, /- \[缺失\] nope\.md/);
   assert.match(r.text, /ALPHA 内容/, "同一条 goal 里的有效引用照常注入");
@@ -79,10 +83,53 @@ test("expandAtRefs：.git 与 STATE 内的路径一律拒绝（@ 是绕过 gate 
 
 test("userMessage：@file 段进 user message（资料不当指令），缺失回调接到 input 事件写入方", () => {
   const missing: string[] = [];
-  const msg = D.userMessage(spec("照着 @a.md 做，缺的看 @gone.md"), false, BASE, (ref) => missing.push(ref));
+  const msg = D.userMessage(spec("照着 @a.md 做，缺的看 @gone.md"), false, BASE, (ref, info) => { if (!info.ok) missing.push(ref); });
   assert.match(msg, /## 引用文件/);
   assert.match(msg, /ALPHA 内容/);
   assert.match(msg, /\[缺失\] gone\.md/);
   assert.deepEqual(missing, ["gone.md"]);
   assert.ok(msg.indexOf("## 引用文件") > msg.indexOf("## 节点上下文"), "引用段在上下文之后");
+});
+
+test("atRefBases：AICA_REPO_ROOT → runs 祖先里的仓库根 → 节点目录", () => {
+  const nodeDir = mkdtempSync(join(tmpdir(), "aica-r3-at-node-"));
+  const bases = D.atRefBases(nodeDir);
+  assert.deepEqual(bases.map((b: any) => b.label), ["repo", "node"]);
+  assert.equal(bases[0].dir, R, "从 runs 上一路找到含 package.json 的祖先");
+  assert.equal(bases[1].dir, nodeDir);
+
+  process.env.AICA_REPO_ROOT = join(tmpdir(), "aica-r3-at-fake-repo");
+  try {
+    const withEnv = D.atRefBases(nodeDir);
+    assert.equal(withEnv[0].label, "repo");
+    assert.equal(withEnv[0].dir, join(tmpdir(), "aica-r3-at-fake-repo"), "显式 AICA_REPO_ROOT 最优先");
+  } finally { delete process.env.AICA_REPO_ROOT; }
+});
+
+test("expandAtRefs：同一 ref 按基准顺序命中，命中哪个记在 base 上（repo 优先于 node）", () => {
+  const nodeDir = mkdtempSync(join(tmpdir(), "aica-r3-at-node2-"));
+  mkdirSync(join(R, "docs"), { recursive: true });
+  writeFileSync(join(R, "docs", "ref.md"), "REPO-COPY", "utf8");
+  mkdirSync(join(nodeDir, "docs"), { recursive: true });
+  writeFileSync(join(nodeDir, "docs", "ref.md"), "NODE-COPY", "utf8");
+  writeFileSync(join(nodeDir, "local.md"), "NODE-ONLY", "utf8");
+
+  const both = D.expandAtRefs("@docs/ref.md", D.atRefBases(nodeDir));
+  assert.equal(both.refs[0].base, "repo", "两处都有 → repo 优先");
+  assert.match(both.text, /REPO-COPY/);
+
+  const nodeOnly = D.expandAtRefs("@local.md", D.atRefBases(nodeDir));
+  assert.equal(nodeOnly.refs[0].base, "node", "只有节点目录有 → 回落到 node");
+  assert.match(nodeOnly.text, /NODE-ONLY/);
+});
+
+test("userMessage：@ref 命中的 base 进回调（daemon 用它在 input 事件里记 base）", () => {
+  const nodeDir = mkdtempSync(join(tmpdir(), "aica-r3-at-node3-"));
+  mkdirSync(join(R, "docs"), { recursive: true });
+  writeFileSync(join(R, "docs", "ref.md"), "REPO-COPY", "utf8");
+  const seen: any[] = [];
+  const msg = D.userMessage(spec("看 @docs/ref.md"), false, nodeDir, (_ref: string, info: any) => seen.push(info));
+  assert.match(msg, /REPO-COPY/);
+  assert.equal(seen[0].base, "repo");
+  assert.equal(seen[0].ok, true);
 });

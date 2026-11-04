@@ -4,6 +4,7 @@ import { createRun, writeSpec, readSpec, writeResult, checkRun, appendEvent, app
 import { daemonLoop } from "./daemon.ts";
 import { listProposals, showProposal, applyProposal, rejectProposal, createProposal, ProposalError } from "./proposals.ts";
 import type { SpecEnvelope, NodeStatus } from "./envelope.ts";
+import { PROFILES, isProfile } from "./envelope.ts";
 import { readFileSync } from "node:fs";
 
 function out(ok: boolean, command: string, data?: unknown, error?: unknown): void {
@@ -83,6 +84,9 @@ async function main(): Promise<void> {
       catch (e) { return out(false, cmd, undefined, { code: "BAD_INPUT", message: `stdin 不是合法 JSON：${String((e as Error).message).split("\n")[0].slice(0, 200)}` }); }
       const subject = String(task?.subject ?? task?.description ?? "").trim();
       if (!subject) return usage(cmd, "缺 subject / description", 'dispatch 需要 stdin JSON，例如 {"subject":"任务","goal":"..."}');
+      if (task.profile !== undefined && task.profile !== null && !isProfile(task.profile)) {
+        return out(false, cmd, undefined, { code: "BAD_INPUT", field: "profile", message: `profile 只接受 ${PROFILES.join("|")}，收到 ${JSON.stringify(task.profile)}` });
+      }
       const { rootId } = createRun({ kind: task.kind, subject });
       writeSpec(rootId, "root", {
         type: "assign",
@@ -107,6 +111,10 @@ async function main(): Promise<void> {
     case "node-create": {
       const rootId = arg("--run");
       if (!rootId) return usage(cmd, "缺 --run", "ar node-create --run <root> [--path root/a] --goal <文本>");
+      const profileArg = arg("--profile");
+      if (profileArg && !isProfile(profileArg)) {
+        return out(false, cmd, undefined, { code: "BAD_INPUT", field: "profile", message: `profile 只接受 ${PROFILES.join("|")}，收到 ${JSON.stringify(profileArg)}` });
+      }
       writeSpec(rootId, arg("--path") ?? `${Date.now().toString(36)}`, {
         type: "assign",
         agent: arg("--agent") ?? "pi",
@@ -244,6 +252,10 @@ async function main(): Promise<void> {
       if (readSpec(rootId, childPath)) return out(false, cmd, undefined, { code: "EXISTS", path: childPath });
       const parentDepth = Number(parentSpec.budget?.depth_left ?? 0);
       if (!(parentDepth >= 1)) return out(false, cmd, undefined, { code: "DEPTH", depth_left: parentDepth, message: "depth_left=0：不能再派子节点" });
+      // R3：profile 闭集（子节点显式指定的必须合法；继承父节点的旧值留给 daemon 兜底）
+      if (req.profile !== undefined && req.profile !== null && !isProfile(req.profile)) {
+        return out(false, cmd, undefined, { code: "BAD_INPUT", field: "profile", message: `profile 只接受 ${PROFILES.join("|")}，收到 ${JSON.stringify(req.profile)}` });
+      }
       const b = (req.budget ?? {}) as Record<string, unknown>;
       const spec = writeSpec(rootId, childPath, {
         type: "assign",
