@@ -1,7 +1,7 @@
 // ar daemon：用户会话常驻宿主，消费派发意图、拉起与回收 Worker 进程
 // 会话边界原因：Session 0 服务碰不到桌面，agent-desktop/ego 只能在交互会话工作
 import { spawn, execFileSync } from "node:child_process";
-import { appendFileSync, existsSync, openSync } from "node:fs";
+import { appendFileSync, existsSync, openSync, writeFileSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { pendingNodes, appendEvent, readResult, writeResult, RUNS_DIR, STATE } from "./runs.ts";
@@ -163,10 +163,14 @@ export interface DaemonOptions {
   timeoutMs?: number;    // 0 = 不限
 }
 
+const PIDFILE = join(STATE, "daemon.pid");
+const heartbeat = (): void => { try { writeFileSync(PIDFILE, `${process.pid} ${Date.now()}`); } catch { /* 写不进也照常跑 */ } };
+
 export async function daemonLoop(opts: DaemonOptions = {}): Promise<void> {
   syncUserEnv();
   const started = Date.now();
   indexLog({ event: "daemon_start", once: !!opts.once, pid: process.pid });
+  try {
   for (;;) {
     try {
       for (const { rootId, path, spec, resumed } of pendingNodes()) {
@@ -181,7 +185,11 @@ export async function daemonLoop(opts: DaemonOptions = {}): Promise<void> {
       indexLog({ event: "daemon_timeout", timeout_ms: opts.timeoutMs, running: [...running] });
       throw new Error(`ar daemon: timeout ${opts.timeoutMs}ms (still running: ${[...running].join(", ") || "none"})`);
     }
+    heartbeat();
     await new Promise((r) => setTimeout(r, POLL_MS));
+  }
+  } finally {
+    try { unlinkSync(PIDFILE); } catch { /* 无 pidfile 也正常退出 */ }
   }
   indexLog({ event: "daemon_stop", once: !!opts.once });
 }

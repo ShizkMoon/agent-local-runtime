@@ -329,26 +329,18 @@ let daemonCache = { at: 0, running: false };
 
 function arEnv(): NodeJS.ProcessEnv { return { ...process.env, AICA_STATE: STATE }; }
 
-/** 已在跑的常驻 daemon 的 pid 列表（跨 workbench 重启去重；--once 实例不算） */
-function daemonPids(): number[] {
-  if (process.platform !== "win32") {
-    return daemonProc && daemonProc.exitCode === null && daemonProc.pid ? [daemonProc.pid] : [];
-  }
-  try {
-    const ps = "Get-CimInstance Win32_Process -Filter \"Name='node.exe'\" | " +
-      "Where-Object { $_.CommandLine -match 'cli\\.ts' -and $_.CommandLine -match '\\sdaemon(\\s|$)' " +
-      "-and $_.CommandLine -notmatch '--once' } | Select-Object -ExpandProperty ProcessId";
-    const out = execFileSync("powershell", ["-NoProfile", "-Command", ps],
-      { encoding: "utf8", timeout: 8000, windowsHide: true });
-    return out.split(/\r?\n/).map(s => Number(s.trim())).filter(n => n > 0);
-  } catch {
-    return daemonProc && daemonProc.exitCode === null && daemonProc.pid ? [daemonProc.pid] : [];
-  }
-}
-
+/** 本 STATE 的常驻 daemon 是否在跑：以 daemon 自己写的 STATE/daemon.pid 心跳为准
+    （进程名匹配会把别的 AICA_STATE 的 daemon 误认成本地的） */
 function daemonRunning(): boolean {
   if (Date.now() - daemonCache.at < 3000) return daemonCache.running;
-  const running = daemonPids().length > 0 || (daemonProc != null && daemonProc.exitCode === null);
+  let running = false;
+  try {
+    const [pid, ts] = readFileSync(join(STATE, "daemon.pid"), "utf8").trim().split(/\s+/).map(Number);
+    if (pid > 0 && Date.now() - ts < 15_000) {
+      try { process.kill(pid, 0); running = true; } catch { /* 进程没了或跨用户 */ }
+    }
+  } catch { /* 无 pidfile */ }
+  if (!running) running = daemonProc != null && daemonProc.exitCode === null;
   daemonCache = { at: Date.now(), running };
   return running;
 }
