@@ -406,6 +406,9 @@ U07 行高阈值从 ≤28px 放宽到 ≤36px（单行不换行仍必须）；U2
 > S21 `f71cab5`、S25 `bdafb81`、S27 `9621bf4`、S18/S23/S24/S26 `b8487f7`、S22/S28 `fbf9934`）。
 > `node --test workbench/test` **172 tests / 167 pass / 0 fail / 5 skipped**（skip 均为显式原因：夹具无 stdout/严格态未实现）。
 > R3 追加：提案/子代理页签、inbox 提案卡、左栏测试归档、plan mode、`@file` 引用、profile 闭集、gate 只读分档、server 传 `AICA_REPO_ROOT`。
+> R4（`ab446e2` `bebfb66`）：MCP fail-closed 网关（`mcp_<server>_<tool>` + 未声明即拒 + 2s 超时降级）、steer 明确 `UNSUPPORTED`、
+> G-2 严格状态机（`ILLEGAL_TRANSITION` + `state_reject`）、低风险提案自动应用（`auto_apply_low` + `auto_applied` 审计）、
+> 计划卡「按此计划执行」、投递三态 UI、设置面板（`Ctrl+,`）。**189 tests / 184 pass / 0 fail / 5 skip**。
 > 真机已验证：工具时间线、diff 展开、计划条、Ctrl+K 面板、健康页、审批三动作 + 500ms 防误批、预算拦截、
 > 孤儿归宿、fork、`ar propose` 六条验收、`spawn` 三子节点与并发。
 > 收尾项（R3）：提案 UI 页签、`result.proposal` 接 hook、左栏 smoke 归档、@ 文件引用、plan mode、MCP。
