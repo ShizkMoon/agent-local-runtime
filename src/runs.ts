@@ -103,26 +103,30 @@ function depPath(rootId: string, dep: string): string {
   return dep.startsWith(prefix) ? dep.slice(prefix.length) : dep;
 }
 
+/** 递归列出 run 下全部节点 path（nodes/root/a 嵌套；pendingNodes/checkRun 共用一份走法） */
+export function listNodePaths(rootId: string): string[] {
+  const nodesRoot = join(runDir(rootId), "nodes");
+  if (!existsSync(nodesRoot)) return [];
+  const paths: string[] = [];
+  const walk = (dir: string, rel: string, depth: number): void => {
+    if (depth > 6) return;
+    for (const ent of readdirSync(dir, { withFileTypes: true })) {
+      if (!ent.isDirectory() || ent.name === "artifacts") continue;
+      const childRel = rel ? `${rel}/${ent.name}` : ent.name;
+      paths.push(childRel);
+      walk(join(dir, ent.name), childRel, depth + 1);
+    }
+  };
+  walk(nodesRoot, "", 0);
+  return paths;
+}
+
 /** daemon 消费的视图：待拉起节点。resumed = waiting 经人工回复后重新拉起（userMessage 追加恢复行用） */
 export function pendingNodes(): { rootId: string; path: string; spec: SpecEnvelope; resumed?: boolean }[] {
   runsDir();
   const out: { rootId: string; path: string; spec: SpecEnvelope; resumed?: boolean }[] = [];
   for (const rootId of readdirSync(RUNS_DIR)) {
-    const nodesRoot = join(runDir(rootId), "nodes");
-    if (!existsSync(nodesRoot)) continue;
-    // 递归收集节点 path（nodes/root/a 这种嵌套子节点；对齐 server.ts nodePaths 的走法）
-    const paths: string[] = [];
-    const walk = (dir: string, rel: string, depth: number): void => {
-      if (depth > 6) return;
-      for (const ent of readdirSync(dir, { withFileTypes: true })) {
-        if (!ent.isDirectory() || ent.name === "artifacts") continue;
-        const childRel = rel ? `${rel}/${ent.name}` : ent.name;
-        paths.push(childRel);
-        walk(join(dir, ent.name), childRel, depth + 1);
-      }
-    };
-    walk(nodesRoot, "", 0);
-    for (const path of paths) {
+    for (const path of listNodePaths(rootId)) {
       const spec = readSpec(rootId, path);
       if (!spec) continue;
       const r = readResult(rootId, path);
@@ -148,12 +152,9 @@ export function pendingNodes(): { rootId: string; path: string; spec: SpecEnvelo
 /** check：一个 Run 的状态汇总（给 evd / UI / 人工看） */
 export function checkRun(rootId: string): { meta: RunMeta | null; nodes: { path: string; status: string; summary?: string }[] } {
   const meta = readJson<RunMeta>(join(runDir(rootId), "run.json"));
-  const nodesRoot = join(runDir(rootId), "nodes");
-  const nodes = existsSync(nodesRoot)
-    ? readdirSync(nodesRoot).map((path) => {
-        const r = readResult(rootId, path);
-        return { path, status: r ? r.status : "running", summary: r?.summary };
-      })
-    : [];
+  const nodes = listNodePaths(rootId).map((path) => {
+    const r = readResult(rootId, path);
+    return { path, status: r ? r.status : "running", summary: r?.summary };
+  });
   return { meta, nodes };
 }
