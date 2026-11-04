@@ -1,7 +1,0 @@
-{
-  "id": "node:b8ef69ef-cd88/badm2",
-  "finished_at": "2026-11-04T05:29:05.654Z",
-  "status": "failed",
-  "summary": "Worker 异常退出（code 1）——详见节点 events.jsonl",
-  "type": "result"
-}

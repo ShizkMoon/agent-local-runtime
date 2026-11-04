@@ -1,7 +1,0 @@
-{
-  "id": "node:b8ef69ef-cd88/rev1",
-  "finished_at": "2026-11-04T05:28:49.288Z",
-  "status": "done",
-  "summary": "核证结论：根产物真实可读（nodes/root/artifacts/hello.txt:1 = hello-artifact-content）且被 art1 逐字物化消费（nodes/art1/inputs/hello.txt:1，result.json status=done），但\"是否正确\"无法判定——root 无 spec.json/result.json/events.jsonl，按 src/runs.ts:228 从未被 dispatch，产物系 run 外预置、无契约可比对；附带发现 checkRun 对无 result 节点恒报 running（src/runs.ts:265-272）、listNodePaths 误把 session/inputs 当节点（src/runs.ts:201-216）、plan.v1.json 节点簿记全空；证据以路径+行号内联（本节点工具面只读，artifacts/ 无法落盘）。",
-  "type": "result"
-}

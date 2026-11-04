@@ -1,9 +1,0 @@
-{
-  "id": "node:testr1/root",
-  "type": "assign",
-  "agent": "pi",
-  "goal": "root goal",
-  "accept": [
-    "a1"
-  ]
-}

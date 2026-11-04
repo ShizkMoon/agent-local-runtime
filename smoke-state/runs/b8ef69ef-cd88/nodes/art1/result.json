@@ -1,7 +1,0 @@
-{
-  "id": "node:b8ef69ef-cd88/art1",
-  "finished_at": "2026-11-04T05:28:03.053Z",
-  "status": "done",
-  "summary": "已消费上游 artifact：inputs/hello.txt（23B，hello-artifact-content，sha256 881578ea…a169）读取校验通过，另 2 个声明输入在物化阶段已被跳过并按缺失容错；证据见 artifacts/summary.md 与 artifacts/consume.log。",
-  "type": "result"
-}

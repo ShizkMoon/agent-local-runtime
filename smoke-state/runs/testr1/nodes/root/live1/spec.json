@@ -1,9 +1,0 @@
-{
-  "id": "node:testr1/root/live1",
-  "type": "assign",
-  "agent": "pi",
-  "goal": "sleep forever",
-  "accept": [
-    "x"
-  ]
-}
